@@ -682,7 +682,7 @@ static inline uint32_t A2XX_RB_COLOR_INFO_SWAP(uint32_t val)
 static inline uint32_t A2XX_RB_COLOR_INFO_BASE(uint32_t val)
 {
 	assert(!(val & 0x3ff));
-	return ((val >> 10) << A2XX_RB_COLOR_INFO_BASE__SHIFT) & A2XX_RB_COLOR_INFO_BASE__MASK;
+	return ((val >> 12) << A2XX_RB_COLOR_INFO_BASE__SHIFT) & A2XX_RB_COLOR_INFO_BASE__MASK;
 }
 
 #define REG_A2XX_RB_DEPTH_INFO					0x00002002
@@ -697,7 +697,7 @@ static inline uint32_t A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(enum adreno_rb_depth_form
 static inline uint32_t A2XX_RB_DEPTH_INFO_DEPTH_BASE(uint32_t val)
 {
 	assert(!(val & 0x3ff));
-	return ((val >> 10) << A2XX_RB_DEPTH_INFO_DEPTH_BASE__SHIFT) & A2XX_RB_DEPTH_INFO_DEPTH_BASE__MASK;
+	return ((val >> 12) << A2XX_RB_DEPTH_INFO_DEPTH_BASE__SHIFT) & A2XX_RB_DEPTH_INFO_DEPTH_BASE__MASK;
 }
 
 #define REG_A2XX_A225_RB_COLOR_INFO3				0x00002005
