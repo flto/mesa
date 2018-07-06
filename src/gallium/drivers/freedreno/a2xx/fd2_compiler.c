@@ -43,6 +43,10 @@
 #include "instr-a2xx.h"
 #include "ir-a2xx.h"
 
+struct fd2_compile_register {
+	int first_used, last_used, shadow_input, idx;
+};
+
 struct fd2_compile_context {
 	struct fd_program_stateobj *prog;
 	struct fd2_shader_stateobj *so;
@@ -74,7 +78,6 @@ struct fd2_compile_context {
 	 */
 
 	int pred_reg;
-	int num_internal_temps;
 
 	uint8_t num_regs[TGSI_FILE_COUNT];
 
@@ -96,6 +99,13 @@ struct fd2_compile_context {
 
 	/* current exec CF instruction */
 	struct ir2_cf *cf;
+
+	/* XXX static allocations ... */
+	struct tgsi_full_instruction inst[64];
+	struct fd2_compile_register reg[64];
+	unsigned num_inst;
+
+	uint64_t regmap;
 };
 
 static int
@@ -122,6 +132,145 @@ export_linkage(struct fd2_compile_context *ctx, int idx)
 	return prog->export_linkage[idx];
 }
 
+static struct fd2_compile_register*
+get_register(struct fd2_compile_context *ctx, unsigned file, unsigned idx)
+{
+    if (file == TGSI_FILE_INPUT)
+		return &ctx->reg[idx];
+
+	if (file == TGSI_FILE_TEMPORARY)
+		return &ctx->reg[ctx->num_regs[TGSI_FILE_INPUT] + idx];
+
+    return NULL;
+}
+
+static struct fd2_compile_register*
+get_src_register(struct fd2_compile_context *ctx,
+		struct tgsi_src_register src)
+{
+	return get_register(ctx, src.File, src.Index);
+}
+
+static struct fd2_compile_register*
+get_dst_register(struct fd2_compile_context *ctx,
+		struct tgsi_dst_register dst)
+{
+	return get_register(ctx, dst.File, dst.Index);
+}
+
+static bool
+mov_check_no_swizzle(const struct tgsi_dst_register dst,
+		const struct tgsi_src_register src)
+{
+	return (!(dst.WriteMask & TGSI_WRITEMASK_X) || src.SwizzleX == TGSI_SWIZZLE_X) &&
+		(!(dst.WriteMask & TGSI_WRITEMASK_Y) || src.SwizzleY == TGSI_SWIZZLE_Y) &&
+		(!(dst.WriteMask & TGSI_WRITEMASK_Z) || src.SwizzleZ == TGSI_SWIZZLE_Z) &&
+		(!(dst.WriteMask & TGSI_WRITEMASK_W) || src.SwizzleW == TGSI_SWIZZLE_W);
+}
+
+static void
+add_instruction(struct fd2_compile_context *ctx,
+		const struct tgsi_full_instruction *inst)
+{
+	unsigned i, idx, nop;
+	struct tgsi_full_instruction *prev;
+	struct fd2_compile_register *dst_reg, *reg;
+	unsigned opc = inst->Instruction.Opcode;
+
+	/* XXX this code makes the following assumptions
+	 * -temporaries/inputs are always used once after being written
+	 * -TGSI_TOKEN_TYPE_DECLARATION for all inputs already processed
+
+	 * the only time we should need a MOV is to copy a fetch to an output
+	 * TODO optimize MOV with src modifiers
+	 * TODO optimize MOV when dst is written multiple times
+	 * TODO use this optimization with if/else when possible
+
+	 * XXX reordering exports?
+	 */
+
+	if (!inst->Instruction.NumDstRegs)
+		return;
+
+	assert(inst->Instruction.NumDstRegs == 1);
+
+	nop = (opc == TGSI_OPCODE_MOV && !inst->Instruction.Saturate &&
+		!inst->Src[0].Register.Negate && !inst->Src[0].Register.Absolute &&
+		mov_check_no_swizzle(inst->Dst[0].Register, inst->Src[0].Register));
+
+	idx = ctx->num_inst;
+	ctx->inst[idx] = *inst;
+
+	/* apply input shadowing */
+	for (i = 0; i < inst->Instruction.NumSrcRegs; i++) {
+		reg = get_src_register(ctx, inst->Src[i].Register);
+		if (reg && reg->shadow_input >= 0) {
+			ctx->inst[idx].Src[i].Register.File = TGSI_FILE_INPUT;
+			ctx->inst[idx].Src[i].Register.Index = reg->shadow_input;
+		}
+	}
+
+	/* dst_reg == NULL when writing to OUTPUT */
+	dst_reg = get_dst_register(ctx, inst->Dst[0].Register);
+
+	if (dst_reg) {
+		if (dst_reg->first_used < 0)
+			dst_reg->first_used = idx;
+		dst_reg->last_used = idx;
+	}
+
+	/* if the operation is a "nop", override previous operation if possible,
+	 * if its already been overridden then copy the instruction
+	 */
+	if (nop) {
+		if (inst->Src[0].Register.File == TGSI_FILE_INPUT) {
+			/* there is no previous op to replace with,
+			 * instead update future references to src */
+			if (dst_reg) {
+				dst_reg->shadow_input = inst->Src[0].Register.Index;
+				return;
+			}
+		} else {
+			reg = get_src_register(ctx, inst->Src[0].Register);
+			assert(reg);
+			prev = &ctx->inst[reg->first_used];
+			opc = prev->Instruction.Opcode;
+
+			if (opc == TGSI_OPCODE_TEX || opc == TGSI_OPCODE_TXP) {
+				/* dont try do anything in this case */
+			} else if (prev->Dst[0].Register.File != TGSI_FILE_OUTPUT) {
+				reg = get_dst_register(ctx, prev->Dst[0].Register);
+				if (reg->first_used == reg->last_used) {
+					prev->Dst[0].Register.File = inst->Dst[0].Register.File;
+					prev->Dst[0].Register.Index = inst->Dst[0].Register.Index;
+					return;
+				}
+			} else {
+				/* copy the operation but with different dst */
+				ctx->inst[idx] = *prev;
+				ctx->inst[idx].Dst[0] = inst->Dst[0];
+			}
+		}
+	}
+
+	/* update src last_used */
+	for (i = 0; i < ctx->inst[idx].Instruction.NumSrcRegs; i++) {
+		reg = get_src_register(ctx, ctx->inst[idx].Src[i].Register);
+		if (reg)
+			reg->last_used = idx;
+	}
+
+	ctx->num_inst++;
+}
+
+static unsigned
+reg_alloc(struct fd2_compile_context *ctx)
+{
+	unsigned idx = ffsll(~ctx->regmap) - 1;
+	ctx->regmap |= (1ul << idx);
+	return idx;
+}
+
 static unsigned
 compile_init(struct fd2_compile_context *ctx, struct fd_program_stateobj *prog,
 		struct fd2_shader_stateobj *so)
@@ -145,17 +294,22 @@ compile_init(struct fd2_compile_context *ctx, struct fd_program_stateobj *prog,
 	ctx->need_sync = 0;
 	ctx->immediate_idx = 0;
 	ctx->pred_reg = -1;
-	ctx->num_internal_temps = 0;
+	ctx->num_inst = 0;
 
 	memset(ctx->num_regs, 0, sizeof(ctx->num_regs));
 	memset(ctx->input_export_idx, 0, sizeof(ctx->input_export_idx));
 	memset(ctx->output_export_idx, 0, sizeof(ctx->output_export_idx));
+	memset(ctx->reg, 0xff, sizeof(ctx->reg));
 
 	/* do first pass to extract declarations: */
 	while (!tgsi_parse_end_of_tokens(&ctx->parser)) {
 		tgsi_parse_token(&ctx->parser);
 
 		switch (ctx->parser.FullToken.Token.Type) {
+		case TGSI_TOKEN_TYPE_INSTRUCTION: {
+			add_instruction(ctx, &ctx->parser.FullToken.FullInstruction);
+			break;
+		}
 		case TGSI_TOKEN_TYPE_DECLARATION: {
 			struct tgsi_full_declaration *decl =
 					&ctx->parser.FullToken.FullDeclaration;
@@ -249,15 +403,19 @@ static void
 compile_vtx_fetch(struct fd2_compile_context *ctx)
 {
 	struct ir2_instruction **vfetch_instrs = ctx->so->vfetch_instrs;
-	int i;
+	int i, idx;
 	for (i = 0; i < ctx->num_regs[TGSI_FILE_INPUT]; i++) {
 		struct ir2_instruction *instr = ir2_instr_create(
 				next_exec_cf(ctx), IR2_FETCH);
 		instr->fetch.opc = VTX_FETCH;
 
-		ctx->need_sync |= 1 << (i+1);
+		idx = i + 1;
+		if (idx == ctx->num_regs[TGSI_FILE_INPUT])
+			idx = 0;
 
-		ir2_reg_create(instr, i+1, "xyzw", 0);
+		ctx->need_sync |= 1 << idx;
+
+		ir2_reg_create(instr, idx, "xyzw", 0);
 		ir2_reg_create(instr, 0, "x", 0);
 
 		if (i == 0)
@@ -302,16 +460,6 @@ compile_vtx_fetch(struct fd2_compile_context *ctx)
  * (uniforms).
  *
  */
-
-static unsigned
-get_temp_gpr(struct fd2_compile_context *ctx, int idx)
-{
-	unsigned num = idx + ctx->num_regs[TGSI_FILE_INPUT];
-	if (ctx->type == PIPE_SHADER_VERTEX)
-		num++;
-	return num;
-}
-
 static struct ir2_register *
 add_dst_reg(struct fd2_compile_context *ctx, struct ir2_instruction *alu,
 		const struct tgsi_dst_register *dst)
@@ -336,7 +484,7 @@ add_dst_reg(struct fd2_compile_context *ctx, struct ir2_instruction *alu,
 		}
 		break;
 	case TGSI_FILE_TEMPORARY:
-		num = get_temp_gpr(ctx, dst->Index);
+		num = get_register(ctx, TGSI_FILE_TEMPORARY, dst->Index)->idx;
 		break;
 	default:
 		DBG("unsupported dst register file: %s",
@@ -370,15 +518,8 @@ add_src_reg(struct fd2_compile_context *ctx, struct ir2_instruction *alu,
 		flags |= IR2_REG_CONST;
 		break;
 	case TGSI_FILE_INPUT:
-		if (ctx->type == PIPE_SHADER_VERTEX) {
-			num = src->Index + 1;
-		} else {
-			num = export_linkage(ctx,
-					ctx->input_export_idx[src->Index]);
-		}
-		break;
 	case TGSI_FILE_TEMPORARY:
-		num = get_temp_gpr(ctx, src->Index);
+		num = get_src_register(ctx, *src)->idx;
 		break;
 	case TGSI_FILE_IMMEDIATE:
 		num = src->Index + ctx->num_regs[TGSI_FILE_CONSTANT];
@@ -523,19 +664,11 @@ get_internal_temp(struct fd2_compile_context *ctx,
 		struct tgsi_dst_register *tmp_dst,
 		struct tgsi_src_register *tmp_src)
 {
-	int n;
-
 	tmp_dst->File      = TGSI_FILE_TEMPORARY;
 	tmp_dst->WriteMask = TGSI_WRITEMASK_XYZW;
 	tmp_dst->Indirect  = 0;
 	tmp_dst->Dimension = 0;
-
-	/* assign next temporary: */
-	n = ctx->num_internal_temps++;
-	if (ctx->pred_reg != -1)
-		n++;
-
-	tmp_dst->Index = ctx->num_regs[TGSI_FILE_TEMPORARY] + n;
+	tmp_dst->Index = reg_alloc(ctx);
 
 	src_from_dst(tmp_src, tmp_dst);
 }
@@ -550,7 +683,7 @@ get_predicate(struct fd2_compile_context *ctx, struct tgsi_dst_register *dst,
 	dst->WriteMask = TGSI_WRITEMASK_W;
 	dst->Indirect  = 0;
 	dst->Dimension = 0;
-	dst->Index     = get_temp_gpr(ctx, ctx->pred_reg);
+	dst->Index     = ctx->pred_reg;
 
 	if (src) {
 		src_from_dst(src, dst);
@@ -574,7 +707,7 @@ push_predicate(struct fd2_compile_context *ctx, struct tgsi_src_register *src)
 
 	if (ctx->pred_depth == 0) {
 		/* assign predicate register: */
-		ctx->pred_reg = ctx->num_regs[TGSI_FILE_TEMPORARY];
+		ctx->pred_reg = reg_alloc(ctx);
 
 		get_predicate(ctx, &pred_dst, NULL);
 
@@ -1011,14 +1144,24 @@ translate_dp2(struct fd2_compile_context *ctx,
 
 static void
 translate_instruction(struct fd2_compile_context *ctx,
-		struct tgsi_full_instruction *inst)
+		struct tgsi_full_instruction *inst, unsigned inst_idx)
 {
 	unsigned opc = inst->Instruction.Opcode;
 	struct ir2_instruction *instr;
 	static struct ir2_cf *cf;
+	unsigned i;
 
 	if (opc == TGSI_OPCODE_END)
 		return;
+
+	/* update the current register map with active variables */
+	ctx->regmap = 0ul;
+	for (i = 0; i < ctx->num_regs[TGSI_FILE_INPUT] + inst->Dst[0].Register.Index; i++)
+		if (ctx->reg[i].last_used > inst_idx)
+			ctx->regmap |= (1ul << ctx->reg[i].idx);
+
+	if (ctx->pred_reg != -1)
+		ctx->regmap |= (1ul << ctx->pred_reg);
 
 	if (inst->Dst[0].Register.File == TGSI_FILE_OUTPUT) {
 		unsigned num = inst->Dst[0].Register.Index;
@@ -1042,6 +1185,10 @@ translate_instruction(struct fd2_compile_context *ctx,
 				ctx->num_param = 0;
 			}
 		}
+	} else {
+		struct fd2_compile_register *reg = get_dst_register(ctx, inst->Dst[0].Register);
+		if (reg->first_used == inst_idx)
+			reg->idx = reg_alloc(ctx);
 	}
 
 	cf = next_exec_cf(ctx);
@@ -1157,28 +1304,22 @@ translate_instruction(struct fd2_compile_context *ctx,
 		assert(0);
 		break;
 	}
-
-	/* internal temporaries are only valid for the duration of a single
-	 * TGSI instruction:
-	 */
-	ctx->num_internal_temps = 0;
 }
 
 static void
 compile_instructions(struct fd2_compile_context *ctx)
 {
-	while (!tgsi_parse_end_of_tokens(&ctx->parser)) {
-		tgsi_parse_token(&ctx->parser);
+	unsigned i;
 
-		switch (ctx->parser.FullToken.Token.Type) {
-		case TGSI_TOKEN_TYPE_INSTRUCTION:
-			translate_instruction(ctx,
-					&ctx->parser.FullToken.FullInstruction);
-			break;
-		default:
-			break;
-		}
+	for (i = 0; i < ctx->num_regs[TGSI_FILE_INPUT]; i++) {
+		if (ctx->type == PIPE_SHADER_VERTEX)
+			ctx->reg[i].idx = (i + 1) % ctx->num_regs[TGSI_FILE_INPUT];
+		else
+			ctx->reg[i].idx = export_linkage(ctx, ctx->input_export_idx[i]);
 	}
+
+	for (i = 0; i < ctx->num_inst; i++)
+		translate_instruction(ctx, &ctx->inst[i], i);
 
 	ctx->cf->cf_type = EXEC_END;
 }
