@@ -77,29 +77,46 @@ emit_vertexbufs(struct fd_context *ctx)
 	// CONST(20,0) (or CONST(26,0) in soliv_vp)
 
 	fd2_emit_vertex_bufs(ctx->batch->draw, 0x78, bufs, vtx->num_elements);
+	if (fd_mesa_debug & FD_DBG_A20XBIN)
+		fd2_emit_vertex_bufs(ctx->batch->binning, 0x78, bufs, vtx->num_elements);
 }
+
+static void
+emit_draw_prep(struct fd_context *ctx, const struct pipe_draw_info *info,
+		   struct fd_ringbuffer *ring, bool a20x_binning)
+{
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_VGT_INDX_OFFSET));
+	OUT_RING(ring, info->index_size ? 0 : info->start);
+
+	/* with a20x binning, value is zero and set once in fd2_emit_tile_init */
+	if (!a20x_binning) {
+		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+		OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
+		/* XXX do this for every REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL write ?
+		 * if set to 0x3b on a20x, clipping is broken
+		 */
+		OUT_RING(ring, is_a20x(ctx->screen) ? 0x00000002 : 0x0000003b);
+	}
+
+	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
+	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
+}
+
 
 static bool
 fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
              unsigned index_offset)
 {
 	struct fd_ringbuffer *ring = ctx->batch->draw;
+	struct fd_ringbuffer *ring_binning = ctx->batch->binning;
 
 	if (ctx->dirty & FD_DIRTY_VTXBUF)
 		emit_vertexbufs(ctx);
 
 	fd2_emit_state(ctx, ctx->dirty);
 
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_VGT_INDX_OFFSET));
-	OUT_RING(ring, info->start);
-
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
-	OUT_RING(ring, 0x0000003b);
-
-	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
-	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
+	emit_draw_prep(ctx, info, ring, false);
 
 	if (!is_a20x(ctx->screen)) {
 		OUT_WFI (ring);
@@ -108,10 +125,27 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 		OUT_RING(ring, CP_REG(REG_A2XX_VGT_MAX_VTX_INDX));
 		OUT_RING(ring, info->max_index);        /* VGT_MAX_VTX_INDX */
 		OUT_RING(ring, info->min_index);        /* VGT_MIN_VTX_INDX */
-	}
+	} else {
+		if (fd_mesa_debug & FD_DBG_A20XBIN) {
+			emit_draw_prep(ctx, info, ring_binning, true);
 
-	fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
-				 IGNORE_VISIBILITY, info, index_offset);
+			OUT_PKT3(ring_binning, CP_SET_CONSTANT, 5);
+			OUT_RING(ring_binning, 0x00000180);
+			OUT_RING(ring_binning, fui(ctx->batch->num_vertices));
+			OUT_RING(ring_binning, fui(0.0f));
+			OUT_RING(ring_binning, fui(0.0f));
+			OUT_RING(ring_binning, fui(0.0f));
+
+			fd_draw_emit(ctx->batch, ring_binning, ctx->primtypes[info->mode],
+				IGNORE_VISIBILITY, info, index_offset);
+
+			fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
+				USE_VISIBILITY, info, index_offset);
+		} else {
+			fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
+				IGNORE_VISIBILITY, info, index_offset);
+		}
+	}
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_UNKNOWN_2010));
@@ -154,7 +188,7 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
 	OUT_RING(ring, 0x0000028f);
 
-	fd2_program_emit(ring, &ctx->solid_prog);
+	fd2_program_emit(ring, &ctx->solid_prog, 0);
 
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);

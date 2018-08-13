@@ -271,9 +271,8 @@ fd2_program_validate(struct fd_context *ctx)
 
 void
 fd2_program_emit(struct fd_ringbuffer *ring,
-		struct fd_program_stateobj *prog)
+		struct fd_program_stateobj *prog, bool a20x_binning)
 {
-	bool a20x_binning = false;
 	struct ir2_shader_info *vsi =
 		&((struct fd2_shader_stateobj *)prog->vp)->info;
 	struct ir2_shader_info *fsi =
