@@ -68,6 +68,8 @@ emit_gmem2mem_surf(struct fd_batch *batch, uint32_t base,
 	struct fd_ringbuffer *ring = batch->gmem;
 	struct fd_resource *rsc = fd_resource(psurf->texture);
 	uint32_t swap = fmt2swap(psurf->format);
+	if (psurf->u.tex.level != 0) // TODO: handle non-zero levels
+		return;
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_INFO));
@@ -168,8 +170,8 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, A2XX_RB_COPY_DEST_OFFSET_X(tile->xoff) |
 			A2XX_RB_COPY_DEST_OFFSET_Y(tile->yoff));
 
-	if (batch->resolve & (FD_BUFFER_DEPTH | FD_BUFFER_STENCIL))
-		emit_gmem2mem_surf(batch, tile->bin_w * tile->bin_h, pfb->zsbuf);
+	//if (batch->resolve & (FD_BUFFER_DEPTH | FD_BUFFER_STENCIL))
+	//	emit_gmem2mem_surf(batch, tile->bin_w * tile->bin_h, pfb->zsbuf);
 
 	if (batch->resolve & FD_BUFFER_COLOR)
 		emit_gmem2mem_surf(batch, 0, pfb->cbufs[0]);
@@ -188,6 +190,8 @@ emit_mem2gmem_surf(struct fd_batch *batch, uint32_t base,
 	struct fd_ringbuffer *ring = batch->gmem;
 	struct fd_resource *rsc = fd_resource(psurf->texture);
 	uint32_t swiz;
+	if (psurf->u.tex.level != 0) // TODO: handle non-zero levels
+		return;
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_INFO));

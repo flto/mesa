@@ -491,6 +491,11 @@ fd2_emit_restore(struct fd_context *ctx, struct fd_ringbuffer *ring)
 	OUT_RING(ring, 0x00000000);        /* RB_BLEND_GREEN */
 	OUT_RING(ring, 0x00000000);        /* RB_BLEND_BLUE */
 	OUT_RING(ring, 0x000000ff);        /* RB_BLEND_ALPHA */
+
+
+	OUT_PKT0(ring, REG_A2XX_RBBM_PM_OVERRIDE1, 2);
+	OUT_RING(ring, 0xffffffff);
+	OUT_RING(ring, 0xffffffff);
 }
 
 static void

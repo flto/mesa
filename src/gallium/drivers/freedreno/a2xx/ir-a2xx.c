@@ -279,7 +279,6 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			 */
 			struct ir2_src_register *src_reg = &instr->src_reg[0];
 			if (a20x_binning && dst_reg.num == 62) {
-				assert(simple_mov(instr, true));
 				add_a20x_binning_instrs(shader, src_reg);
 			} else if ((prev = simple_mov(instr, true))) {
 				/* copy instruction but keep dst */
