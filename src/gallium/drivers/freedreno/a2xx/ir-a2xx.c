@@ -177,10 +177,57 @@ static bool sets_pred(struct ir2_instruction *instr)
 		instr->alu_scalar.opc <= PRED_SET_RESTOREs;
 }
 
+static void add_a20x_binning_instrs(struct ir2_shader *shader,
+		struct ir2_src_register *pos)
+{
+	struct ir2_instruction *instr;
+	/* XXX hacky way to get new temporaries */
+	unsigned tmp = shader->max_reg + 1;
+	unsigned tmp2 = shader->max_reg + 2;
+	unsigned idx = shader->max_reg + 3;
+	unsigned i;
 
+	instr = ir2_instr_create_alu_s(shader, RECIP_CLAMP);
+	ir2_dst_create(instr, tmp, "___w", 0);
+	ir2_reg_create(instr, pos->num, pos->swizzle, pos->flags);
+
+	instr = ir2_instr_create_alu_v(shader, MULv);
+	ir2_dst_create(instr, tmp, "xyzw", 0);
+	ir2_reg_create(instr, pos->num, pos->swizzle, pos->flags);
+	ir2_reg_create(instr, tmp, "wwww", 0);
+
+	/* these two instructions could be avoided with constant folding
+	 * but it would be hard to implement..
+	 */
+	instr = ir2_instr_create_alu_v(shader, MULADDv);
+	ir2_dst_create(instr, tmp, "xyzw", 0);
+	ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
+	ir2_reg_create(instr, tmp, "xyzw", 0);
+	ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
+
+	instr = ir2_instr_create_alu_v(shader, ADDv);
+	ir2_dst_create(instr, tmp2, "x___", 0);
+	ir2_reg_create(instr, 64, "xxxx", IR2_REG_CONST);
+	ir2_reg_create(instr, idx, "xxxx", IR2_REG_INPUT);
+
+	/* XXX fixed number of pipes to 4.. fix with patching or conditions */
+	for (i = 0; i < 4; i++) {
+		instr = ir2_instr_create_alu_v(shader, MULADDv);
+		ir2_dst_create(instr, 32, "xyzw", IR2_REG_EXPORT);
+		ir2_reg_create(instr, 1, "wyww", IR2_REG_CONST);
+		ir2_reg_create(instr, tmp2, "xxxx", 0);
+		ir2_reg_create(instr, 3 + i, "xyzw", IR2_REG_CONST);
+
+		instr = ir2_instr_create_alu_v(shader, MULADDv);
+		ir2_dst_create(instr, 33, "xyzw", IR2_REG_EXPORT);
+		ir2_reg_create(instr, 68 + i * 2, "xyzw", IR2_REG_CONST);
+		ir2_reg_create(instr, tmp, "xyzw", 0);
+		ir2_reg_create(instr, 67 + i * 2, "xyzw", IR2_REG_CONST);
+	}
+}
 
 void* ir2_shader_assemble(struct ir2_shader *shader,
-		struct ir2_shader_info *info)
+		struct ir2_shader_info *info, bool a20x_binning)
 {
 	/* NOTES
 	 * blob compiler seems to always puts PRED_* instrs in a CF by
@@ -203,9 +250,17 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	/* mask of exports that must be generated
 	 * used to avoid calculating ps exports with hw binning
 	*/
-	uint64_t export = ~0ull;
+	uint64_t export = a20x_binning ? ~0xffffffffull : ~0ull;
 	/* bitmask of variables required for exports defined by "export" */
 	uint32_t export_mask[REG_MASK/32+1] = {};
+
+	/* a20x hw binning will add instructions to the shader
+	 * save these values to remove them afterwards
+	 * XXX this is very hacky..
+	 */
+	unsigned instr_count = shader->instr_count;
+	unsigned max_reg = shader->max_reg;
+	unsigned heap_idx = shader->heap_idx;
 
 	unsigned idx, reg_idx;
 	unsigned max_input = 0;
@@ -219,7 +274,14 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			if (dst_reg.num < 32)
 				export_size++;
 
-			if ((prev = simple_mov(instr, true))) {
+			/* with a20x hw binning, we don't optimize out the MOV
+			 * since we will reuse the position variable later
+			 */
+			struct ir2_src_register *src_reg = &instr->src_reg[0];
+			if (a20x_binning && dst_reg.num == 62) {
+				assert(simple_mov(instr, true));
+				add_a20x_binning_instrs(shader, src_reg);
+			} else if ((prev = simple_mov(instr, true))) {
 				/* copy instruction but keep dst */
 				*instr = *prev;
 				instr->dst_reg = dst_reg;
@@ -239,7 +301,11 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			reg->read_idx = idx;
 
 			if (src_reg->flags & IR2_REG_INPUT) {
-				max_input = MAX2(max_input, num);
+				/* XXX condition hack to avoid the input added reference by
+				 * add_a20x_binning_instrs
+				 */
+				if (num != shader->max_reg)
+					max_input = MAX2(max_input, num);
 			} else {
 				/* bypass simple mov used to set src_reg */
 				assert(reg->write_idx >= 0);
@@ -271,6 +337,15 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	for (reg_idx = 0; reg_idx <= max_input; reg_idx++)
 		shader->reg[reg_idx].reg = reg_idx;
 	info->max_reg = max_input;
+
+	/* XXX R2 contains the vertex index used for a20x hw binning
+	 * add_a20x_binning_instrs assigns it to max_reg
+	 */
+	if (a20x_binning) {
+		shader->reg[shader->max_reg].reg = 2;
+		info->max_reg = MAX2(info->max_reg, 2);
+		export_size = 0;
+	}
 
 	/* CF instr state */
 	instr_cf_exec_t exec = { .opc = EXEC };
@@ -381,6 +456,13 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 		*cf++ = (instr_cf_t) { .opc = NOP };
 		num_cfs++;
 	}
+
+	/* XXX restore original shader object (a20x binning) */
+	memset(&shader->heap[heap_idx], 0,
+		(shader->heap_idx - heap_idx) * sizeof(*shader->heap));
+	shader->instr_count = instr_count;
+	shader->max_reg = max_reg;
+	shader->heap_idx = heap_idx;
 
 	/* offset cf addrs */
 	for (idx = 0; idx < num_cfs; idx++) {

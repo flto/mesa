@@ -130,7 +130,7 @@ struct ir2_shader {
 struct ir2_shader * ir2_shader_create(void);
 void ir2_shader_destroy(struct ir2_shader *shader);
 void * ir2_shader_assemble(struct ir2_shader *shader,
-		struct ir2_shader_info *info);
+		struct ir2_shader_info *info, bool a20x_binning);
 
 struct ir2_instruction * ir2_instr_create(struct ir2_shader *shader,
 		int instr_type);
