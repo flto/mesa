@@ -170,8 +170,8 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, A2XX_RB_COPY_DEST_OFFSET_X(tile->xoff) |
 			A2XX_RB_COPY_DEST_OFFSET_Y(tile->yoff));
 
-	//if (batch->resolve & (FD_BUFFER_DEPTH | FD_BUFFER_STENCIL))
-	//	emit_gmem2mem_surf(batch, tile->bin_w * tile->bin_h, pfb->zsbuf);
+	if (batch->resolve & (FD_BUFFER_DEPTH | FD_BUFFER_STENCIL))
+		emit_gmem2mem_surf(batch, tile->bin_w * tile->bin_h, pfb->zsbuf);
 
 	if (batch->resolve & FD_BUFFER_COLOR)
 		emit_gmem2mem_surf(batch, 0, pfb->cbufs[0]);
