@@ -322,8 +322,10 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			uint32_t *mask = (dst_reg.flags & IR2_REG_EXPORT) ?
 					export_mask : shader->reg[dst_reg.num].regmask;
 			mask_set(mask, reg, num);
-			if (sets_pred(instr))
+			if (sets_pred(instr)) {
 				mask_set(export_mask, reg, num);
+				mask_set(export_mask, reg, dst_reg.num);
+			}
 		}
 	}
 
