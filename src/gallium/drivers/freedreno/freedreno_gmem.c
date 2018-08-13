@@ -146,7 +146,7 @@ calculate_tiles(struct fd_batch *batch)
 		return;
 	}
 
-	if (fd_mesa_debug & FD_DBG_NOSCIS) {
+	if ((fd_mesa_debug & FD_DBG_NOSCIS) || scissor->minx == 65535) {
 		minx = 0;
 		miny = 0;
 		width = pfb->width;
