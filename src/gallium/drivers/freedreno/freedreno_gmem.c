@@ -215,12 +215,21 @@ calculate_tiles(struct fd_batch *batch)
 
 #define div_round_up(v, a)  (((v) + (a) - 1) / (a))
 	/* figure out number of tiles per pipe: */
-	tpp_x = tpp_y = 1;
-	while (div_round_up(nbins_y, tpp_y) > 8)
-		tpp_y += 2;
-	while ((div_round_up(nbins_y, tpp_y) *
-			div_round_up(nbins_x, tpp_x)) > 8)
-		tpp_x += 1;
+	if (is_a20x(ctx->screen)) {
+		/* for a20x we want to minimize the number of "pipes"
+		 * binning data has 3 bits for x/y (8x8) but the edges are used to
+		 * cull off-screen vertices with hw binning, so we have 6x6 pipes
+		 */
+		tpp_x = 6;
+		tpp_y = 6;
+	} else {
+		tpp_x = tpp_y = 1;
+		while (div_round_up(nbins_y, tpp_y) > 8)
+			tpp_y += 2;
+		while ((div_round_up(nbins_y, tpp_y) *
+				div_round_up(nbins_x, tpp_x)) > 8)
+			tpp_x += 1;
+	}
 
 	gmem->maxpw = tpp_x;
 	gmem->maxph = tpp_y;
@@ -245,6 +254,12 @@ calculate_tiles(struct fd_batch *batch)
 		pipe->h = MIN2(tpp_y, nbins_y - yoff);
 
 		xoff += tpp_x;
+	}
+	ctx->num_vsc_pipe = i;
+	/* XXX temporary until patching shader is figured out */
+	if (is_a20x(ctx->screen)) {
+		assert(i <= 4);
+		ctx->num_vsc_pipe = 4;
 	}
 
 	for (; i < npipes; i++) {
@@ -281,11 +296,12 @@ calculate_tiles(struct fd_batch *batch)
 
 			/* pipe number: */
 			p = ((i / tpp_y) * div_round_up(nbins_x, tpp_x)) + (j / tpp_x);
+			assert(p < ctx->num_vsc_pipe);
 
 			/* clip bin width: */
 			bw = MIN2(bin_w, minx + width - xoff);
-
-			tile->n = tile_n[p]++;
+			tile->n = !is_a20x(ctx->screen) ? tile_n[p]++ :
+				((i % tpp_y + 1) << 3 | (j % tpp_x + 1));
 			tile->p = p;
 			tile->bin_w = bw;
 			tile->bin_h = bh;

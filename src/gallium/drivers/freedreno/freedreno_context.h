@@ -260,6 +260,7 @@ struct fd_context {
 	struct fd_gmem_stateobj gmem;
 	struct fd_vsc_pipe      vsc_pipe[16];
 	struct fd_tile          tile[512];
+	unsigned num_vsc_pipe;
 
 	/* which state objects need to be re-emit'd: */
 	enum fd_dirty_3d_state dirty;
