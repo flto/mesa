@@ -214,6 +214,17 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 
 	fd2_program_emit(ring, &ctx->solid_prog, 0);
 
+	struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
+	float sx = (float) (scissor->maxx - scissor->minx) * 0.5f;
+	float sy = (float) (scissor->maxy - scissor->miny) * 0.5f;
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VPORT_XSCALE));
+	OUT_RING(ring, fui(sx));
+	OUT_RING(ring, fui(sx));
+	OUT_RING(ring, fui(sy));
+	OUT_RING(ring, fui(sy));
+
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
 
