@@ -108,6 +108,13 @@ enum pc_di_src_sel {
 	DI_SRC_SEL_RESERVED = 3,
 };
 
+enum pc_di_face_cull_sel {
+    DI_FACE_CULL_NONE = 0,
+    DI_FACE_CULL_FETCH = 1,
+    DI_FACE_BACKFACE_CULL = 2,
+    DI_FACE_FRONTFACE_CULL = 3,
+};
+
 enum pc_di_index_size {
 	INDEX_SIZE_IGN = 0,
 	INDEX_SIZE_16_BIT = 0,

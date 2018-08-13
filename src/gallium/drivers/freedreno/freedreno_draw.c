@@ -254,6 +254,8 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	if (ctx->draw_vbo(ctx, info, index_offset))
 		batch->needs_flush = true;
 
+	batch->num_vertices += info->count;
+
 	for (i = 0; i < ctx->streamout.num_targets; i++)
 		ctx->streamout.offsets[i] += info->count;
 
