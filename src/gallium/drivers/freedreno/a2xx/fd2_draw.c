@@ -101,6 +101,30 @@ emit_draw_prep(struct fd_context *ctx, const struct pipe_draw_info *info,
 
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
+
+	if (is_a20x(ctx->screen)) {
+		/* wait for DMA to finish and
+		 * dummy draw one triangle with indexes 0,0,0.
+		 * with PRE_FETCH_CULL_ENABLE | GRP_CULL_ENABLE.
+		 *
+		 * this workaround is for a HW bug related to DMA alignment:
+		 * it is necessary for indexed draws and possibly also
+		 * draws that read binning data
+		 */
+		OUT_PKT3(ring, CP_WAIT_REG_EQ, 4);
+		OUT_RING(ring, 0x000005d0); /* RBBM_STATUS */
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x00001000); /* bit: 12: VGT_BUSY_NO_DMA */
+		OUT_RING(ring, 0x00000001);
+
+		OUT_PKT3(ring, CP_DRAW_INDX_BIN, 6);
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x0003c004);
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x00000003);
+		OUT_RELOC(ring, fd_resource(fd2_context(ctx)->solid_vertexbuf)->bo, 0x80, 0, 0);
+		OUT_RING(ring, 0x00000006);
+	}
 }
 
 
