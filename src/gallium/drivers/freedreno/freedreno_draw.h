@@ -41,6 +41,7 @@ struct fd_ringbuffer;
 
 void fd_draw_init(struct pipe_context *pctx);
 
+
 static inline void
 fd_draw(struct fd_batch *batch, struct fd_ringbuffer *ring,
 		enum pc_di_primtype primtype,
@@ -75,9 +76,31 @@ fd_draw(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	}
 
 	if (is_a20x(batch->ctx->screen)) {
-		OUT_PKT3(ring, CP_DRAW_INDX, idx_buffer ? 4 : 2);
+		/* a20x has a different draw command for drawing with binning data
+		 * that makes it harder to patch so always use hw binning if enabled
+		 *
+		 * binning data is is 1 byte/vertex (8x8x4 bin position of vertex)
+		 * base ptr set by the CP_SET_DRAW_INIT_FLAGS command
+		 *
+		 * TODO: investigate the faceness_cull_select parameter to see how
+		 * it is used with hw binning to use "faceness" bits
+		 */
+		bool bin = (vismode == USE_VISIBILITY);
+		uint32_t draw_initiator = DRAW_A20X(primtype, DI_FACE_CULL_NONE,
+			src_sel, idx_type, bin, bin, count);
+		uint32_t size = 2;
+		if (bin)
+			size += 2;
+		if (idx_buffer)
+			size += 2;
+
+		OUT_PKT3(ring, bin ? CP_DRAW_INDX_BIN : CP_DRAW_INDX, size);
 		OUT_RING(ring, 0x00000000);
-		OUT_RING(ring, DRAW_A20X(primtype, src_sel, idx_type, vismode, count));
+		OUT_RING(ring, draw_initiator);
+		if (bin) {
+			OUT_RING(ring, batch->num_vertices);
+			OUT_RING(ring, count);
+		}
 	} else {
 		OUT_PKT3(ring, CP_DRAW_INDX, idx_buffer ? 5 : 3);
 		OUT_RING(ring, 0x00000000);        /* viz query info. */
@@ -102,7 +125,6 @@ fd_draw(struct fd_batch *batch, struct fd_ringbuffer *ring,
 
 	fd_reset_wfi(batch);
 }
-
 
 static inline enum pc_di_index_size
 size2indextype(unsigned index_size)
