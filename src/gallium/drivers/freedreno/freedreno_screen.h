@@ -36,6 +36,7 @@
 #include "util/u_memory.h"
 #include "util/slab.h"
 #include "os/os_thread.h"
+#include "renderonly/renderonly.h"
 
 #include "freedreno_batch_cache.h"
 #include "freedreno_perfcntr.h"
@@ -82,6 +83,7 @@ struct fd_screen {
 	void *compiler;          /* currently unused for a2xx */
 
 	struct fd_device *dev;
+	struct renderonly *ro;
 
 	/* NOTE: we still need a pipe associated with the screen in a few
 	 * places, like screen->get_timestamp().  For anything context
@@ -104,15 +106,11 @@ fd_screen(struct pipe_screen *pscreen)
 {
 	return (struct fd_screen *)pscreen;
 }
-
-boolean fd_screen_bo_get_handle(struct pipe_screen *pscreen,
-		struct fd_bo *bo,
-		unsigned stride,
-		struct winsys_handle *whandle);
 struct fd_bo * fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 		struct winsys_handle *whandle);
 
-struct pipe_screen * fd_screen_create(struct fd_device *dev);
+struct pipe_screen *
+fd_screen_create(struct fd_device *dev, struct renderonly *ro);
 
 static inline boolean
 is_a20x(struct fd_screen *screen)

@@ -26,6 +26,7 @@
 
 #include "imx_drm_public.h"
 #include "etnaviv/drm/etnaviv_drm_public.h"
+#include "freedreno/drm/freedreno_drm_public.h"
 #include "renderonly/renderonly.h"
 
 #include <fcntl.h>
@@ -42,7 +43,18 @@ struct pipe_screen *imx_drm_screen_create(int fd)
    if (ro.gpu_fd < 0)
       return NULL;
 
-   struct pipe_screen *screen = etna_drm_screen_create_renderonly(&ro);
+   drmVersion *version = drmGetVersion(ro.gpu_fd);
+   if (!version) {
+      close(ro.gpu_fd);
+      return NULL;
+   }
+
+   struct pipe_screen *screen = (strcmp(version->name, "msm") == 0) ?
+      fd_drm_screen_create_renderonly(&ro) :
+      etna_drm_screen_create_renderonly(&ro);
+
+   drmFreeVersion(version);
+
    if (!screen)
       close(ro.gpu_fd);
 
