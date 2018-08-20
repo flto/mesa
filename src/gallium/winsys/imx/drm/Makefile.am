@@ -26,7 +26,8 @@ include $(top_srcdir)/src/gallium/Automake.inc
 AM_CFLAGS = \
 	-I$(top_srcdir)/src/gallium/drivers \
 	-I$(top_srcdir)/src/gallium/winsys \
-	$(GALLIUM_WINSYS_CFLAGS)
+	$(GALLIUM_WINSYS_CFLAGS) \
+	$(ETNAVIV_CFLAGS)
 
 noinst_LTLIBRARIES = libimxdrm.la
 

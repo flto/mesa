@@ -31,6 +31,7 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <xf86drm.h>
 
 struct pipe_screen *imx_drm_screen_create(int fd)
 {
