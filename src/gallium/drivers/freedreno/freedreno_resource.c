@@ -42,6 +42,7 @@
 #include "freedreno_query_hw.h"
 #include "freedreno_util.h"
 
+#include <drm_fourcc.h>
 #include <errno.h>
 
 /* XXX this should go away, needed for 'struct winsys_handle' */
@@ -665,6 +666,7 @@ fd_resource_get_handle(struct pipe_screen *pscreen,
 	struct fd_bo *bo = rsc->bo;
 
 	handle->stride = rsc->slices[0].pitch * rsc->cpp;
+	handle->modifier = DRM_FORMAT_MOD_LINEAR;
 
 	if (handle->type == WINSYS_HANDLE_TYPE_SHARED) {
 		return fd_bo_get_name(bo, &handle->handle) == 0;
@@ -839,14 +841,16 @@ fd_resource_create(struct pipe_screen *pscreen,
 		struct renderonly_scanout *scanout;
 		struct winsys_handle handle;
 
+		scanout_templat.width0 = align(tmpl->width0, screen->gmem_alignw);
 		scanout = renderonly_scanout_for_resource(&scanout_templat,
 										screen->ro, &handle);
 		if (!scanout)
 			return NULL;
 
 		assert(handle.type == WINSYS_HANDLE_TYPE_FD);
-		// handle.modifier = modifier;
+		handle.modifier = DRM_FORMAT_MOD_LINEAR;
 		scanout_templat.bind &= ~PIPE_BIND_SCANOUT;
+		scanout_templat.width0 = tmpl->width0;
 		rsc = fd_resource(pscreen->resource_from_handle(pscreen, &scanout_templat,
 												&handle,
 												PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE));
@@ -1246,6 +1250,27 @@ static const struct u_transfer_vtbl transfer_vtbl = {
 		.get_stencil              = fd_resource_get_stencil,
 };
 
+static struct pipe_resource *
+fd_resource_create_modifiers(struct pipe_screen *pscreen,
+                             const struct pipe_resource *templat,
+                             const uint64_t *modifiers, int count)
+{
+   struct pipe_resource templ = *templat;
+   struct pipe_resource *prsc = NULL;
+
+   /*
+    * We currently assume that all buffers allocated through this interface
+    * should be scanout enabled.
+    */
+   templ.bind |= PIPE_BIND_SCANOUT;
+
+   for(int i = 0; i < count; i++) {
+      if (modifiers[i] == DRM_FORMAT_MOD_LINEAR)
+         prsc = pscreen->resource_create(pscreen, &templ);
+   }
+
+   return prsc;
+}
 void
 fd_resource_screen_init(struct pipe_screen *pscreen)
 {
@@ -1253,6 +1278,7 @@ fd_resource_screen_init(struct pipe_screen *pscreen)
 	bool fake_rgtc = screen->gpu_id < 400;
 
 	pscreen->resource_create = u_transfer_helper_resource_create;
+	pscreen->resource_create_with_modifiers = fd_resource_create_modifiers;
 	pscreen->resource_from_handle = fd_resource_from_handle;
 	pscreen->resource_get_handle = fd_resource_get_handle;
 	pscreen->resource_destroy = u_transfer_helper_resource_destroy;

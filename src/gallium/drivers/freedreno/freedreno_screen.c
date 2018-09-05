@@ -39,6 +39,7 @@
 
 #include "util/os_time.h"
 
+#include <drm_fourcc.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -668,6 +669,23 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 	return bo;
 }
 
+static void
+fd_query_dmabuf_modifiers(struct pipe_screen *pscreen,
+                                   enum pipe_format format, int max,
+                                   uint64_t *modifiers,
+                                   unsigned int *external_only, int *count)
+{
+   *count = 1;
+
+   if (!max)
+	return;
+
+   if (modifiers)
+      modifiers[0] = DRM_FORMAT_MOD_LINEAR;
+   if (external_only)
+      external_only[0] = 0;
+}
+
 struct pipe_screen *
 fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 {
@@ -835,6 +853,7 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 	pscreen->get_shader_param = fd_screen_get_shader_param;
 	pscreen->get_compute_param = fd_get_compute_param;
 	pscreen->get_compiler_options = fd_get_compiler_options;
+	pscreen->query_dmabuf_modifiers = fd_query_dmabuf_modifiers;
 
 	fd_resource_screen_init(pscreen);
 	fd_query_screen_init(pscreen);
