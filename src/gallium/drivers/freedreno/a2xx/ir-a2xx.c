@@ -330,8 +330,13 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			}
 
 			/* update dependencies */
-			uint32_t *mask = (dst_reg.flags & IR2_REG_EXPORT) ?
-					export_mask : shader->reg[dst_reg.num].regmask;
+			uint32_t *mask = shader->reg[dst_reg.num].regmask;
+			if (dst_reg.flags & IR2_REG_EXPORT) {
+				mask = export_mask;
+				if (!(export & (1ull << dst_reg.num)))
+					continue;
+			}
+
 			mask_set(mask, reg, num);
 			if (sets_pred(instr)) {
 				mask_set(export_mask, reg, num);
@@ -514,7 +519,6 @@ struct ir2_instruction * ir2_instr_create(struct ir2_shader *shader,
 	shader->instr[shader->instr_count++] = instr;
 	return instr;
 }
-
 
 /*
  * FETCH instructions:
