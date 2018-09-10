@@ -165,6 +165,8 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 
 			fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
 				USE_VISIBILITY, info, index_offset);
+
+			OUT_WFI(ring);
 		} else {
 			fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
 				IGNORE_VISIBILITY, info, index_offset);
