@@ -103,6 +103,52 @@ total_size(uint8_t cbuf_cpp[], uint8_t zsbuf_cpp[2],
 	return total;
 }
 
+static int32_t
+step_bin_up(int32_t margin, uint32_t *bin_w, uint32_t *bin_n, uint32_t align)
+{
+	/* get the next width,num point, increasing width */
+	uint32_t w = *bin_w, n = *bin_n;
+
+	assert(n > 1);
+
+	do {
+		w += align;
+		margin += n * align;
+	} while (margin < w);
+
+	do {
+		n--;
+		margin -= w;
+	} while (margin >= w);
+
+	*bin_w = w;
+	*bin_n = n;
+	return margin;
+}
+
+static int32_t
+step_bin_down(int32_t margin, uint32_t *bin_w, uint32_t *bin_n, uint32_t align)
+{
+	/* get the next width,num point, decreasing width */
+	uint32_t w = *bin_w, n = *bin_n;
+
+	do {
+		w -= align;
+		margin -= n * align;
+	} while (margin >= 0);
+
+	assert(w);
+
+	do {
+		n++;
+		margin += w;
+	} while (margin < 0);
+
+	*bin_w = w;
+	*bin_n = n;
+	return margin;
+}
+
 static void
 calculate_tiles(struct fd_batch *batch)
 {
@@ -115,8 +161,9 @@ calculate_tiles(struct fd_batch *batch)
 	const unsigned npipes = ctx->screen->num_vsc_pipes;
 	const uint32_t gmem_size = ctx->screen->gmemsize_bytes;
 	uint32_t minx, miny, width, height;
-	uint32_t nbins_x = 1, nbins_y = 1;
-	uint32_t bin_w, bin_h;
+	uint32_t nbins_x, nbins_y, nbx, nby;
+	uint32_t bin_w, bin_h, bw, bh;
+	int32_t margin_x, margin_y;
 	uint32_t max_width = bin_width(ctx->screen);
 	uint8_t cbuf_cpp[MAX_RENDER_TARGETS] = {0}, zsbuf_cpp[2] = {0};
 	uint32_t i, j, t, xoff, yoff;
@@ -159,17 +206,6 @@ calculate_tiles(struct fd_batch *batch)
 		height = scissor->maxy - miny;
 	}
 
-	bin_w = align(width, gmem_alignw);
-	bin_h = align(height, gmem_alignh);
-
-	/* first, find a bin width that satisfies the maximum width
-	 * restrictions:
-	 */
-	while (bin_w > max_width) {
-		nbins_x++;
-		bin_w = align(width / nbins_x, gmem_alignw);
-	}
-
 	if (fd_mesa_debug & FD_DBG_MSGS) {
 		debug_printf("binning input: cbuf cpp:");
 		for (i = 0; i < pfb->nr_cbufs; i++)
@@ -178,18 +214,46 @@ calculate_tiles(struct fd_batch *batch)
 				zsbuf_cpp[0], width, height);
 	}
 
-	/* then find a bin width/height that satisfies the memory
-	 * constraints:
+#define div_round_up(v, a)  (((v) + (a) - 1) / (a))
+	/* algorithm : decrease nbins_x while increasing nbins_y accordingly,
+	 * keeping the best result to minimize the number of bins
+	 * for cases with same # of bins, nbins_x + nbins_y is mimimized
 	 */
-	while (total_size(cbuf_cpp, zsbuf_cpp, bin_w, bin_h, gmem) > gmem_size) {
-		if (bin_w > bin_h) {
-			nbins_x++;
-			bin_w = align(width / nbins_x, gmem_alignw);
-		} else {
-			nbins_y++;
-			bin_h = align(height / nbins_y, gmem_alignh);
+
+	/* force cmp < 0 on 1st iter */
+	nbins_x = 0xffff;
+	nbins_y = 1;
+
+	bw = gmem_alignw;
+	nbx = div_round_up(width, bw);
+	margin_x = bw * nbx - width;
+
+	bh = align(height, gmem_alignh);
+	nby = 1;
+	margin_y = bh * nby - height;
+
+	while (bw <= max_width) {
+		int cmp;
+
+		while (total_size(cbuf_cpp, zsbuf_cpp, bw, bh, gmem) > gmem_size)
+			margin_y = step_bin_down(margin_y, &bh, &nby, gmem_alignh);
+
+		cmp = nbx * nby - nbins_x * nbins_y;
+		if (cmp < 0 || (cmp == 0 && nbx + nby < nbins_x + nbins_y)) {
+			nbins_x = nbx;
+			nbins_y = nby;
+			bin_w = bw;
+			bin_h = bh;
 		}
+
+		if (nbx <= 1)
+			break;
+
+		margin_x = step_bin_up(margin_x, &bw, &nbx, gmem_alignw);
 	}
+
+	/* needed to update offsets */
+	total_size(cbuf_cpp, zsbuf_cpp, bin_w, bin_h, gmem);
 
 	DBG("using %d bins of size %dx%d", nbins_x*nbins_y, bin_w, bin_h);
 
@@ -213,7 +277,6 @@ calculate_tiles(struct fd_batch *batch)
 	 * performance.
 	 */
 
-#define div_round_up(v, a)  (((v) + (a) - 1) / (a))
 	/* figure out number of tiles per pipe: */
 	if (is_a20x(ctx->screen)) {
 		/* for a20x we want to minimize the number of "pipes"
