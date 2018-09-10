@@ -48,6 +48,8 @@ create_shader(enum shader_t type)
 	if (!so)
 		return NULL;
 	so->type = type;
+	so->info.num_exports = 1;
+	so->info.fragcoord = -1;
 	return so;
 }
 
@@ -103,6 +105,10 @@ compile(struct fd_program_stateobj *prog, struct fd2_shader_stateobj *so)
 	 */
 
 	so->info.sizedwords = 0;
+	so->info.num_exports = so->type == SHADER_VERTEX ? prog->num_exports : 32;
+	so->info.fragcoord = prog->export_linkage[TGSI_SEMANTIC_POSITION];
+	if (so->info.fragcoord == 0xff)
+		so->info.fragcoord = -1;
 
 	return so;
 

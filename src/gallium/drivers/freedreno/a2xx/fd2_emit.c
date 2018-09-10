@@ -270,22 +270,6 @@ fd2_emit_state_main(struct fd_context *ctx,
 		OUT_RING(ring, fui(ctx->viewport.scale[2]));       /* PA_CL_VPORT_ZSCALE */
 		OUT_RING(ring, fui(ctx->viewport.translate[2]));   /* PA_CL_VPORT_ZOFFSET */
 
-		if (a20x_binning) {
-			/* set C65/C66 */
-			OUT_PKT3(ring, CP_SET_CONSTANT, 9);
-			OUT_RING(ring, 0x00000184);
-
-			OUT_RING(ring, fui(ctx->viewport.translate[0]));
-			OUT_RING(ring, fui(ctx->viewport.translate[1]));
-			OUT_RING(ring, fui(0.0f));
-			OUT_RING(ring, fui(0.0f));
-
-			OUT_RING(ring, fui(ctx->viewport.scale[0]));
-			OUT_RING(ring, fui(ctx->viewport.scale[1]));
-			OUT_RING(ring, fui(1.0f));
-			OUT_RING(ring, fui(0.0f));
-		}
-
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
 		OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
@@ -295,6 +279,20 @@ fd2_emit_state_main(struct fd_context *ctx,
 				A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
 				A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
 				A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
+
+		/* set C65/C66, for shader viewport */
+		OUT_PKT3(ring, CP_SET_CONSTANT, 9);
+		OUT_RING(ring, 0x00000184);
+
+		OUT_RING(ring, fui(ctx->viewport.translate[0]));
+		OUT_RING(ring, fui(ctx->viewport.translate[1]));
+		OUT_RING(ring, fui(ctx->viewport.translate[2]));
+		OUT_RING(ring, fui(0.0f));
+
+		OUT_RING(ring, fui(ctx->viewport.scale[0]));
+		OUT_RING(ring, fui(ctx->viewport.scale[1]));
+		OUT_RING(ring, fui(ctx->viewport.scale[2]));
+		OUT_RING(ring, fui(0.0f));
 	}
 
 	if (dirty & (FD_DIRTY_PROG | FD_DIRTY_VTXSTATE | FD_DIRTY_TEXSTATE)) {

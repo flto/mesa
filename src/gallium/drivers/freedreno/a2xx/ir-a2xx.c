@@ -177,14 +177,13 @@ static bool sets_pred(struct ir2_instruction *instr)
 		instr->alu_scalar.opc <= PRED_SET_RESTOREs;
 }
 
-static void add_a20x_binning_instrs(struct ir2_shader *shader,
-		struct ir2_src_register *pos)
+static void add_instrs(struct ir2_shader *shader,
+		struct ir2_shader_info *info, struct ir2_src_register *pos)
 {
 	struct ir2_instruction *instr;
 	/* XXX hacky way to get new temporaries */
 	unsigned tmp = shader->max_reg + 1;
-	unsigned tmp2 = shader->max_reg + 2;
-	unsigned idx = shader->max_reg + 3;
+	unsigned idx = shader->max_reg + 5;
 	unsigned i;
 
 	instr = ir2_instr_create_alu_s(shader, RECIP_CLAMP);
@@ -192,21 +191,33 @@ static void add_a20x_binning_instrs(struct ir2_shader *shader,
 	ir2_reg_create(instr, pos->num, pos->swizzle, pos->flags);
 
 	instr = ir2_instr_create_alu_v(shader, MULv);
-	ir2_dst_create(instr, tmp, "xyzw", 0);
+	ir2_dst_create(instr, tmp + 1, "xyzw", 0);
 	ir2_reg_create(instr, pos->num, pos->swizzle, pos->flags);
 	ir2_reg_create(instr, tmp, "wwww", 0);
+
+	if (info->fragcoord >= 0) {
+		instr = ir2_instr_create_alu_v(shader, MULADDv);
+		ir2_dst_create(instr, info->fragcoord, "xyz_", IR2_REG_EXPORT);
+		ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
+		ir2_reg_create(instr, tmp + 1, "xyzw", 0);
+		ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
+
+		instr = ir2_instr_create_alu_s(shader, MAXs);
+		ir2_dst_create(instr, info->fragcoord, "___w", IR2_REG_EXPORT);
+		ir2_reg_create(instr, tmp, "wwww", 0);
+	}
 
 	/* these two instructions could be avoided with constant folding
 	 * but it would be hard to implement..
 	 */
 	instr = ir2_instr_create_alu_v(shader, MULADDv);
-	ir2_dst_create(instr, tmp, "xyzw", 0);
+	ir2_dst_create(instr, tmp + 2, "xyzw", 0);
 	ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
-	ir2_reg_create(instr, tmp, "xyzw", 0);
+	ir2_reg_create(instr, tmp + 1, "xyzw", 0);
 	ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
 
 	instr = ir2_instr_create_alu_v(shader, ADDv);
-	ir2_dst_create(instr, tmp2, "x___", 0);
+	ir2_dst_create(instr, tmp + 3, "x___", 0);
 	ir2_reg_create(instr, 64, "xxxx", IR2_REG_CONST);
 	ir2_reg_create(instr, idx, "xxxx", IR2_REG_INPUT);
 
@@ -215,13 +226,13 @@ static void add_a20x_binning_instrs(struct ir2_shader *shader,
 		instr = ir2_instr_create_alu_v(shader, MULADDv);
 		ir2_dst_create(instr, 32, "xyzw", IR2_REG_EXPORT);
 		ir2_reg_create(instr, 1, "wyww", IR2_REG_CONST);
-		ir2_reg_create(instr, tmp2, "xxxx", 0);
+		ir2_reg_create(instr, tmp + 3, "xxxx", 0);
 		ir2_reg_create(instr, 3 + i, "xyzw", IR2_REG_CONST);
 
 		instr = ir2_instr_create_alu_v(shader, MULADDv);
 		ir2_dst_create(instr, 33, "xyzw", IR2_REG_EXPORT);
 		ir2_reg_create(instr, 68 + i * 2, "xyzw", IR2_REG_CONST);
-		ir2_reg_create(instr, tmp, "xyzw", 0);
+		ir2_reg_create(instr, tmp + 2, "xyzw", 0);
 		ir2_reg_create(instr, 67 + i * 2, "xyzw", IR2_REG_CONST);
 	}
 }
@@ -250,7 +261,8 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	/* mask of exports that must be generated
 	 * used to avoid calculating ps exports with hw binning
 	*/
-	uint64_t export = a20x_binning ? ~0xffffffffull : ~0ull;
+	uint64_t export = a20x_binning ? ~0xffffffffull : 0xffff0000ffffffffull;
+	export &= ((1ull << info->num_exports) - 1) | 0xffffffff00000001ull;
 	/* bitmask of variables required for exports defined by "export" */
 	uint32_t export_mask[REG_MASK/32+1] = {};
 
@@ -278,8 +290,8 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			 * since we will reuse the position variable later
 			 */
 			struct ir2_src_register *src_reg = &instr->src_reg[0];
-			if (a20x_binning && dst_reg.num == 62) {
-				add_a20x_binning_instrs(shader, src_reg);
+			if (dst_reg.num == 62) {
+				add_instrs(shader, info, src_reg);
 			} else if ((prev = simple_mov(instr, true))) {
 				/* copy instruction but keep dst */
 				*instr = *prev;
