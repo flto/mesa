@@ -72,8 +72,8 @@ struct fd2_shader_stateobj {
 	} immediates[64];
 };
 
-void fd2_program_emit(struct fd_ringbuffer *ring,
-		struct fd_program_stateobj *prog, bool a20x_binning);
+void fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
+		struct fd_program_stateobj *prog);
 void fd2_program_validate(struct fd_context *ctx);
 
 void fd2_prog_init(struct pipe_context *pctx);

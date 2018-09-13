@@ -128,7 +128,7 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
 	OUT_RING(ring, 0x0000028f);
 
-	fd2_program_emit(ring, &ctx->solid_prog, 0);
+	fd2_program_emit(batch, ring, &ctx->solid_prog);
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_AA_MASK));
@@ -271,7 +271,7 @@ fd2_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
 	OUT_RING(ring, 0x0000003b);
 
-	fd2_program_emit(ring, &ctx->blit_prog[0], 0);
+	fd2_program_emit(batch, ring, &ctx->blit_prog[0]);
 
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
@@ -366,7 +366,21 @@ fd2_emit_tile_init(struct fd_batch *batch)
 		reg |= A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(fd_pipe2depth(pfb->zsbuf->format));
 	OUT_RING(ring, reg);                         /* RB_DEPTH_INFO */
 
-	if (is_a20x(ctx->screen) && fd_mesa_debug & FD_DBG_A20XBIN) {
+	if (is_a20x(ctx->screen) && !(fd_mesa_debug & FD_DBG_NOBIN)) {
+		for (i = 0; i < fd_patch_num_elements(&batch->draw_patches); i++) {
+			struct fd_cs_patch *patch = fd_patch_element(&batch->draw_patches, i);
+			*patch->cs = patch->val;
+
+			instr_cf_t *cf = (instr_cf_t*) patch->cs;
+			if (cf->opc == ALLOC)
+				cf++;
+			assert(cf->opc == EXEC);
+			assert(cf[14].opc == EXEC_END);
+			cf[2*(ctx->num_vsc_pipe-1)].opc = EXEC_END;
+		}
+		util_dynarray_resize(&batch->draw_patches, 0);
+
+
 		/* initialize shader constants for the binning memexport */
 		OUT_PKT3(ring, CP_SET_CONSTANT, 1 + ctx->num_vsc_pipe * 4);
 		OUT_RING(ring, 0x0000000C);
@@ -406,6 +420,7 @@ fd2_emit_tile_init(struct fd_batch *batch)
 			 * can clip primitives in Z too
 			 * TODO: how does pointsize fit into this?
 			 */
+
 			mul_x = 1.0f / (float) (gmem->bin_w * 8);
 			mul_y = 1.0f / (float) (gmem->bin_h * 8);
 			off_x = -pipe->x * (1.0/8.0f) + 0.125f;
@@ -474,7 +489,7 @@ fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, A2XX_PA_SC_WINDOW_OFFSET_X(-tile->xoff) |
 			A2XX_PA_SC_WINDOW_OFFSET_Y(-tile->yoff));
 
-	if (is_a20x(ctx->screen) && fd_mesa_debug & FD_DBG_A20XBIN) {
+	if (is_a20x(ctx->screen) && !(fd_mesa_debug & FD_DBG_NOBIN)) {
 		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[tile->p];
 
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);

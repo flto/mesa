@@ -180,14 +180,13 @@ fd2_emit_vertex_bufs(struct fd_ringbuffer *ring, uint32_t val,
 	}
 }
 
-static void
-fd2_emit_state_main(struct fd_context *ctx,
-		const enum fd_dirty_3d_state dirty, bool a20x_binning)
+void
+fd2_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
+		const enum fd_dirty_3d_state dirty)
 {
 	struct fd2_blend_stateobj *blend = fd2_blend_stateobj(ctx->blend);
 	struct fd2_zsa_stateobj *zsa = fd2_zsa_stateobj(ctx->zsa);
-	struct fd_ringbuffer *ring = a20x_binning ? ctx->batch->binning :
-		ctx->batch->draw;
+	bool binning = ring == ctx->batch->binning;
 
 	/* NOTE: we probably want to eventually refactor this so each state
 	 * object handles emitting it's own state..  although the mapping of
@@ -226,7 +225,7 @@ fd2_emit_state_main(struct fd_context *ctx,
 		OUT_RING(ring, rasterizer->pa_cl_clip_cntl);
 		OUT_RING(ring, rasterizer->pa_su_sc_mode_cntl |
 				A2XX_PA_SU_SC_MODE_CNTL_VTX_WINDOW_OFFSET_ENABLE |
-				(a20x_binning ? A2XX_PA_SU_SC_MODE_CNTL_FACE_KILL_ENABLE : 0));
+				(binning ? A2XX_PA_SU_SC_MODE_CNTL_FACE_KILL_ENABLE : 0));
 
 		OUT_PKT3(ring, CP_SET_CONSTANT, 5);
 		OUT_RING(ring, CP_REG(REG_A2XX_PA_SU_POINT_SIZE));
@@ -297,7 +296,7 @@ fd2_emit_state_main(struct fd_context *ctx,
 
 	if (dirty & (FD_DIRTY_PROG | FD_DIRTY_VTXSTATE | FD_DIRTY_TEXSTATE)) {
 		fd2_program_validate(ctx);
-		fd2_program_emit(ring, &ctx->prog, a20x_binning);
+		fd2_program_emit(ctx->batch, ring, &ctx->prog);
 	}
 
 	if (dirty & (FD_DIRTY_PROG | FD_DIRTY_CONST)) {
@@ -342,14 +341,6 @@ fd2_emit_state_main(struct fd_context *ctx,
 
 	if (dirty & (FD_DIRTY_TEX | FD_DIRTY_PROG))
 		emit_textures(ring, ctx);
-}
-
-void
-fd2_emit_state(struct fd_context *ctx, const enum fd_dirty_3d_state dirty)
-{
-	fd2_emit_state_main(ctx, dirty, 0);
-	if (fd_mesa_debug & FD_DBG_A20XBIN)
-		fd2_emit_state_main(ctx, dirty, 1);
 }
 
 /* emit per-context initialization:

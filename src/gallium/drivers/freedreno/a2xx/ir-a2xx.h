@@ -39,7 +39,7 @@ struct ir2_shader_info {
 	uint16_t sizedwords;
 	int8_t   max_reg;   /* highest GPR # used by shader */
 	unsigned num_exports;
-	int fragcoord;
+	int first_export32;
 };
 
 struct ir2_register {
@@ -121,6 +121,8 @@ struct ir2_shader {
 	unsigned instr_count;
 	int max_reg;
 	struct ir2_register reg[REG_MASK+1];
+
+	int regremap[256];
 
 	struct ir2_instruction *instr[0x200];
 	uint32_t heap[100 * 4096];

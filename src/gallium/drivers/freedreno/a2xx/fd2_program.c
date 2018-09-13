@@ -49,7 +49,7 @@ create_shader(enum shader_t type)
 		return NULL;
 	so->type = type;
 	so->info.num_exports = 1;
-	so->info.fragcoord = -1;
+	so->info.first_export32 = -1;
 	return so;
 }
 
@@ -72,7 +72,8 @@ assemble(struct fd2_shader_stateobj *so, bool a20x_binning)
 	if (!so->bin)
 		goto fail;
 
-	if (fd_mesa_debug & FD_DBG_DISASM) {
+	if (0) {
+	//if (fd_mesa_debug & FD_DBG_DISASM) {
 		DBG("disassemble: type=%d", so->type);
 		disasm_a2xx(so->bin, so->info.sizedwords, 0, so->type);
 	}
@@ -90,6 +91,9 @@ compile(struct fd_program_stateobj *prog, struct fd2_shader_stateobj *so)
 {
 	int ret;
 
+	//if (so->ir)
+	//	return so;
+
 	if (fd_mesa_debug & FD_DBG_DISASM) {
 		DBG("dump tgsi: type=%d", so->type);
 		tgsi_dump(so->tokens, 0);
@@ -106,9 +110,6 @@ compile(struct fd_program_stateobj *prog, struct fd2_shader_stateobj *so)
 
 	so->info.sizedwords = 0;
 	so->info.num_exports = so->type == SHADER_VERTEX ? prog->num_exports : 32;
-	so->info.fragcoord = prog->export_linkage[TGSI_SEMANTIC_POSITION];
-	if (so->info.fragcoord == 0xff)
-		so->info.fragcoord = -1;
 
 	return so;
 
@@ -119,9 +120,11 @@ fail:
 }
 
 static void
-emit(struct fd_ringbuffer *ring, struct fd2_shader_stateobj *so,
-	bool a20x_binning)
+emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
+		struct fd2_shader_stateobj *so)
 {
+	bool binning = ring == batch->binning;
+	bool a20x_binning = binning && is_a20x(batch->ctx->screen);
 	unsigned i;
 
 	if (so->info.sizedwords == 0)
@@ -130,8 +133,12 @@ emit(struct fd_ringbuffer *ring, struct fd2_shader_stateobj *so,
 	OUT_PKT3(ring, CP_IM_LOAD_IMMEDIATE, 2 + so->info.sizedwords);
 	OUT_RING(ring, (so->type == SHADER_VERTEX) ? 0 : 1);
 	OUT_RING(ring, so->info.sizedwords);
-	for (i = 0; i < so->info.sizedwords; i++)
-		OUT_RING(ring, so->bin[i]);
+	for (i = 0; i < so->info.sizedwords; i++) {
+		if (i == so->info.first_export32 / 2 * 3 && a20x_binning)
+			OUT_RINGP(ring, so->bin[i], &batch->draw_patches);
+		else
+			OUT_RING(ring, so->bin[i]);
+	}
 }
 
 static void *
@@ -276,18 +283,20 @@ fd2_program_validate(struct fd_context *ctx)
 }
 
 void
-fd2_program_emit(struct fd_ringbuffer *ring,
-		struct fd_program_stateobj *prog, bool a20x_binning)
+fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
+		struct fd_program_stateobj *prog)
 {
 	struct ir2_shader_info *vsi =
 		&((struct fd2_shader_stateobj *)prog->vp)->info;
 	struct ir2_shader_info *fsi =
 		&((struct fd2_shader_stateobj *)prog->fp)->info;
 	uint8_t vs_gprs, fs_gprs, vs_export;
+	bool binning = ring == batch->binning;
+	bool a20x_binning = binning && is_a20x(batch->ctx->screen);
 
-	emit(ring, prog->vp, a20x_binning);
-	if (!a20x_binning)
-		emit(ring, prog->fp, 0);
+	emit(batch, ring, prog->vp);
+	if (!binning)
+		emit(batch, ring, prog->fp);
 
 	vs_gprs = (vsi->max_reg < 0) ? 0x80 : vsi->max_reg;
 	fs_gprs = (fsi->max_reg < 0) ? 0x80 : fsi->max_reg;

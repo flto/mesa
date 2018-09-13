@@ -70,6 +70,8 @@ static void print_srcreg(uint32_t num, uint32_t type,
 		printf("-");
 	if (abs)
 		printf("|");
+	if (type)
+		num &= 63;
 	printf("%c%u", type ? 'R' : 'C', num);
 	if (swiz) {
 		int i;
@@ -238,15 +240,15 @@ static int disasm_alu(uint32_t *dwords, uint32_t alu_off,
 	print_dstreg(alu->vector_dest, alu->vector_write_mask, alu->export_data);
 	printf(" = ");
 	if (vector_instructions[alu->vector_opc].num_srcs == 3) {
-		print_srcreg(alu->src3_reg, alu->src3_sel, alu->src3_swiz,
+		print_srcreg(alu->src3_reg_const, alu->src3_sel, alu->src3_swiz,
 				alu->src3_reg_negate, alu->src3_reg_abs);
 		printf(", ");
 	}
-	print_srcreg(alu->src1_reg, alu->src1_sel, alu->src1_swiz,
+	print_srcreg(alu->src1_reg_const, alu->src1_sel, alu->src1_swiz,
 			alu->src1_reg_negate, alu->src1_reg_abs);
 	if (vector_instructions[alu->vector_opc].num_srcs > 1) {
 		printf(", ");
-		print_srcreg(alu->src2_reg, alu->src2_sel, alu->src2_swiz,
+		print_srcreg(alu->src2_reg_const, alu->src2_sel, alu->src2_swiz,
 				alu->src2_reg_negate, alu->src2_reg_abs);
 	}
 
@@ -273,7 +275,7 @@ static int disasm_alu(uint32_t *dwords, uint32_t alu_off,
 
 		print_dstreg(alu->scalar_dest, alu->scalar_write_mask, alu->export_data);
 		printf(" = ");
-		print_srcreg(alu->src3_reg, alu->src3_sel, alu->src3_swiz,
+		print_srcreg(alu->src3_reg_const, alu->src3_sel, alu->src3_swiz,
 				alu->src3_reg_negate, alu->src3_reg_abs);
 		// TODO ADD/MUL must have another src?!?
 		if (alu->scalar_clamp)

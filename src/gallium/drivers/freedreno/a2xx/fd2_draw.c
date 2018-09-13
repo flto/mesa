@@ -77,20 +77,22 @@ emit_vertexbufs(struct fd_context *ctx)
 	// CONST(20,0) (or CONST(26,0) in soliv_vp)
 
 	fd2_emit_vertex_bufs(ctx->batch->draw, 0x78, bufs, vtx->num_elements);
-	if (fd_mesa_debug & FD_DBG_A20XBIN)
-		fd2_emit_vertex_bufs(ctx->batch->binning, 0x78, bufs, vtx->num_elements);
+	fd2_emit_vertex_bufs(ctx->batch->binning, 0x78, bufs, vtx->num_elements);
 }
 
 static void
-emit_draw_prep(struct fd_context *ctx, const struct pipe_draw_info *info,
-		   struct fd_ringbuffer *ring, bool a20x_binning)
+draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
+		   struct fd_ringbuffer *ring, unsigned index_offset,
+		   bool binning)
 {
+	enum pc_di_vis_cull_mode vismode;
+
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_INDX_OFFSET));
 	OUT_RING(ring, info->index_size ? 0 : info->start);
 
-	/* with a20x binning, value is zero and set once in fd2_emit_tile_init */
-	if (!a20x_binning) {
+	/* in the binning batch, thid value is set once in fd2_emit_tile_init */
+	if (!binning) {
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
 		/* XXX do this for every REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL write ?
@@ -124,60 +126,79 @@ emit_draw_prep(struct fd_context *ctx, const struct pipe_draw_info *info,
 		OUT_RING(ring, 0x00000003);
 		OUT_RELOC(ring, fd_resource(fd2_context(ctx)->solid_vertexbuf)->bo, 0x80, 0, 0);
 		OUT_RING(ring, 0x00000006);
-	}
-}
-
-
-static bool
-fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
-             unsigned index_offset)
-{
-	struct fd_ringbuffer *ring = ctx->batch->draw;
-	struct fd_ringbuffer *ring_binning = ctx->batch->binning;
-
-	if (ctx->dirty & FD_DIRTY_VTXBUF)
-		emit_vertexbufs(ctx);
-
-	fd2_emit_state(ctx, ctx->dirty);
-
-	emit_draw_prep(ctx, info, ring, false);
-
-	if (!is_a20x(ctx->screen)) {
+	} else {
 		OUT_WFI (ring);
 
 		OUT_PKT3(ring, CP_SET_CONSTANT, 3);
 		OUT_RING(ring, CP_REG(REG_A2XX_VGT_MAX_VTX_INDX));
 		OUT_RING(ring, info->max_index);        /* VGT_MAX_VTX_INDX */
 		OUT_RING(ring, info->min_index);        /* VGT_MIN_VTX_INDX */
-	} else {
-		if (fd_mesa_debug & FD_DBG_A20XBIN) {
-			emit_draw_prep(ctx, info, ring_binning, true);
-
-			OUT_PKT3(ring_binning, CP_SET_CONSTANT, 5);
-			OUT_RING(ring_binning, 0x00000180);
-			OUT_RING(ring_binning, fui(ctx->batch->num_vertices));
-			OUT_RING(ring_binning, fui(0.0f));
-			OUT_RING(ring_binning, fui(0.0f));
-			OUT_RING(ring_binning, fui(0.0f));
-
-			fd_draw_emit(ctx->batch, ring_binning, ctx->primtypes[info->mode],
-				IGNORE_VISIBILITY, info, index_offset);
-
-			fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
-				USE_VISIBILITY, info, index_offset);
-
-			OUT_WFI(ring);
-		} else {
-			fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
-				IGNORE_VISIBILITY, info, index_offset);
-		}
 	}
 
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_UNKNOWN_2010));
-	OUT_RING(ring, 0x00000000);
+	/* C64 holds offset to use for binning data */
+	if (binning && is_a20x(ctx->screen)) {
+		OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+		OUT_RING(ring, 0x00000180);
+		OUT_RING(ring, fui(ctx->batch->num_vertices));
+		OUT_RING(ring, fui(0.0f));
+		OUT_RING(ring, fui(0.0f));
+		OUT_RING(ring, fui(0.0f));
+	}
+
+	vismode = binning ? IGNORE_VISIBILITY : USE_VISIBILITY;
+	/* a22x hw binning not implemented */
+	if (binning || !is_a20x(ctx->screen) || (fd_mesa_debug & FD_DBG_NOBIN))
+		vismode = IGNORE_VISIBILITY;
+
+	fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
+			vismode, info, index_offset);
+
+	/* necessary workaround.. gpu might hang without it */
+	if (is_a20x(ctx->screen) && vismode == USE_VISIBILITY)
+		OUT_WFI(ring);
 
 	emit_cacheflush(ring);
+}
+
+
+static bool
+fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
+             unsigned index_offset)
+{
+	if (ctx->dirty & FD_DIRTY_VTXBUF)
+		emit_vertexbufs(ctx);
+
+	fd2_emit_state(ctx, ctx->batch->draw, ctx->dirty);
+	fd2_emit_state(ctx, ctx->batch->binning, ctx->dirty);
+
+	/* a20x can only draw 65535 vertices at once... */
+	if (is_a20x(ctx->screen) && pinfo->count > 0xffff) {
+		struct pipe_draw_info info = *pinfo;
+		unsigned count = info.count;
+		unsigned num_vertices = ctx->batch->num_vertices;
+
+		/* other primitives require more work
+		 * (triangles works because 0xffff is divible by 3)
+		 */
+		if (info.mode != PIPE_PRIM_TRIANGLES)
+			return false;
+
+        for (; count; ) {
+			info.count = MIN2(count, 0xffff);
+
+			draw_impl(ctx, &info, ctx->batch->draw, index_offset, false);
+			draw_impl(ctx, &info, ctx->batch->binning, index_offset, true);
+
+			info.start += 0xffff;
+			ctx->batch->num_vertices += 0xffff;
+			count -= info.count;
+        }
+        /* changing this value is a hack, restore it */
+        ctx->batch->num_vertices = num_vertices;
+	} else {
+		draw_impl(ctx, pinfo, ctx->batch->draw, index_offset, false);
+		draw_impl(ctx, pinfo, ctx->batch->binning, index_offset, true);
+	}
 
 	fd_context_all_clean(ctx);
 
@@ -198,7 +219,7 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 		colr = pack_rgba(PIPE_FORMAT_R8G8B8A8_UNORM, color->f);
 
 	/* emit generic state now: */
-	fd2_emit_state(ctx, ctx->dirty &
+	fd2_emit_state(ctx, ring, ctx->dirty &
 			(FD_DIRTY_BLEND | FD_DIRTY_VIEWPORT |
 					FD_DIRTY_FRAMEBUFFER | FD_DIRTY_SCISSOR));
 
@@ -214,7 +235,7 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
 	OUT_RING(ring, 0x0000028f);
 
-	fd2_program_emit(ring, &ctx->solid_prog, 0);
+	fd2_program_emit(ctx->batch, ring, &ctx->solid_prog);
 
 	struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
 	float sx = (float) (scissor->maxx - scissor->minx) * 0.5f;

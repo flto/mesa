@@ -318,12 +318,7 @@ calculate_tiles(struct fd_batch *batch)
 
 		xoff += tpp_x;
 	}
-	ctx->num_vsc_pipe = i;
-	/* XXX temporary until patching shader is figured out */
-	if (is_a20x(ctx->screen)) {
-		assert(i <= 4);
-		ctx->num_vsc_pipe = 4;
-	}
+	ctx->num_vsc_pipe = i ? i : 1;
 
 	for (; i < npipes; i++) {
 		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[i];

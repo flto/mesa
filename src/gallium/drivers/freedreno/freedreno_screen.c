@@ -84,7 +84,6 @@ static const struct debug_named_value debug_options[] = {
 		{"noblit",    FD_DBG_NOBLIT, "Disable blitter (fallback to generic blit path)"},
 		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
 		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
-		{"a20xbin",   FD_DBG_A20XBIN,"Enable hw binning (a20x)"},
 		{"perfcntrs", FD_DBG_PERFC,  "Expose performance counters"},
 		DEBUG_NAMED_VALUE_END
 };

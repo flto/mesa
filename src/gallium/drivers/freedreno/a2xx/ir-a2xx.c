@@ -82,7 +82,7 @@ void ir2_shader_destroy(struct ir2_shader *shader)
 /* check if an instruction is a simple MOV
  */
 static struct ir2_instruction * simple_mov(struct ir2_instruction *instr,
-		bool output)
+		int output)
 {
     struct ir2_src_register *src_reg = instr->src_reg;
     struct ir2_dst_register *dst_reg = &instr->dst_reg;
@@ -119,6 +119,9 @@ static struct ir2_instruction * simple_mov(struct ir2_instruction *instr,
 			swiz != (src_reg[1].swizzle ? src_reg[1].swizzle : "xyzw")[i])
 			return NULL;
     }
+
+    if (output == 2)
+		return instr;
 
     if (output)
 		reg = &instr->shader->reg[src_reg[0].num];
@@ -177,66 +180,6 @@ static bool sets_pred(struct ir2_instruction *instr)
 		instr->alu_scalar.opc <= PRED_SET_RESTOREs;
 }
 
-static void add_instrs(struct ir2_shader *shader,
-		struct ir2_shader_info *info, struct ir2_src_register *pos)
-{
-	struct ir2_instruction *instr;
-	/* XXX hacky way to get new temporaries */
-	unsigned tmp = shader->max_reg + 1;
-	unsigned idx = shader->max_reg + 5;
-	unsigned i;
-
-	instr = ir2_instr_create_alu_s(shader, RECIP_CLAMP);
-	ir2_dst_create(instr, tmp, "___w", 0);
-	ir2_reg_create(instr, pos->num, pos->swizzle, pos->flags);
-
-	instr = ir2_instr_create_alu_v(shader, MULv);
-	ir2_dst_create(instr, tmp + 1, "xyzw", 0);
-	ir2_reg_create(instr, pos->num, pos->swizzle, pos->flags);
-	ir2_reg_create(instr, tmp, "wwww", 0);
-
-	if (info->fragcoord >= 0) {
-		instr = ir2_instr_create_alu_v(shader, MULADDv);
-		ir2_dst_create(instr, info->fragcoord, "xyz_", IR2_REG_EXPORT);
-		ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
-		ir2_reg_create(instr, tmp + 1, "xyzw", 0);
-		ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
-
-		instr = ir2_instr_create_alu_s(shader, MAXs);
-		ir2_dst_create(instr, info->fragcoord, "___w", IR2_REG_EXPORT);
-		ir2_reg_create(instr, tmp, "wwww", 0);
-	}
-
-	/* these two instructions could be avoided with constant folding
-	 * but it would be hard to implement..
-	 */
-	instr = ir2_instr_create_alu_v(shader, MULADDv);
-	ir2_dst_create(instr, tmp + 2, "xyzw", 0);
-	ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
-	ir2_reg_create(instr, tmp + 1, "xyzw", 0);
-	ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
-
-	instr = ir2_instr_create_alu_v(shader, ADDv);
-	ir2_dst_create(instr, tmp + 3, "x___", 0);
-	ir2_reg_create(instr, 64, "xxxx", IR2_REG_CONST);
-	ir2_reg_create(instr, idx, "xxxx", IR2_REG_INPUT);
-
-	/* XXX fixed number of pipes to 4.. fix with patching or conditions */
-	for (i = 0; i < 4; i++) {
-		instr = ir2_instr_create_alu_v(shader, MULADDv);
-		ir2_dst_create(instr, 32, "xyzw", IR2_REG_EXPORT);
-		ir2_reg_create(instr, 1, "wyww", IR2_REG_CONST);
-		ir2_reg_create(instr, tmp + 3, "xxxx", 0);
-		ir2_reg_create(instr, 3 + i, "xyzw", IR2_REG_CONST);
-
-		instr = ir2_instr_create_alu_v(shader, MULADDv);
-		ir2_dst_create(instr, 33, "xyzw", IR2_REG_EXPORT);
-		ir2_reg_create(instr, 68 + i * 2, "xyzw", IR2_REG_CONST);
-		ir2_reg_create(instr, tmp + 2, "xyzw", 0);
-		ir2_reg_create(instr, 67 + i * 2, "xyzw", IR2_REG_CONST);
-	}
-}
-
 void* ir2_shader_assemble(struct ir2_shader *shader,
 		struct ir2_shader_info *info, bool a20x_binning)
 {
@@ -283,17 +226,12 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 		struct ir2_dst_register dst_reg = instr->dst_reg;
 
 		if (dst_reg.flags & IR2_REG_EXPORT) {
+			/* count number of exports for later ALLOC cf */
 			if (dst_reg.num < 32)
 				export_size++;
 
-			/* with a20x hw binning, we don't optimize out the MOV
-			 * since we will reuse the position variable later
-			 */
-			struct ir2_src_register *src_reg = &instr->src_reg[0];
-			if (dst_reg.num == 62) {
-				add_instrs(shader, info, src_reg);
-			} else if ((prev = simple_mov(instr, true))) {
-				/* copy instruction but keep dst */
+			/* replace MOV with previous instruction (keeping the dst) */
+			if ((prev = simple_mov(instr, 1))) {
 				*instr = *prev;
 				instr->dst_reg = dst_reg;
 			}
@@ -312,16 +250,12 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			reg->read_idx = idx;
 
 			if (src_reg->flags & IR2_REG_INPUT) {
-				/* XXX condition hack to avoid the input added reference by
-				 * add_a20x_binning_instrs
-				 */
-				if (num != shader->max_reg)
-					max_input = MAX2(max_input, num);
+				max_input = MAX2(max_input, num);
 			} else {
 				/* bypass simple mov used to set src_reg */
 				assert(reg->write_idx >= 0);
 				prev = shader->instr[reg->write_idx];
-				if (simple_mov(prev, false)) {
+				if (simple_mov(prev, 0)) {
 					*src_reg = prev->src_reg[0];
 					/* process same src_reg again */
 					reg_idx -= 1;
@@ -360,7 +294,7 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	 * add_a20x_binning_instrs assigns it to max_reg
 	 */
 	if (a20x_binning) {
-		shader->reg[shader->max_reg].reg = 2;
+		shader->reg[15].reg = 2;
 		info->max_reg = MAX2(info->max_reg, 2);
 		export_size = 0;
 	}
@@ -370,6 +304,8 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	instr_cf_alloc_t alloc = { .opc = ALLOC };
 	bool need_alloc = 0;
 	bool pos_export = 0;
+
+	int first_export32 = -1;
 
 	export_size = MAX2(export_size, 0);
 
@@ -405,6 +341,8 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 				need_alloc = export_size >= 0;
 				export_size = -1;
 			} else if (num == 32 || num == 33) {
+				if (first_export32 == -1)
+					first_export32 = cf - cfs + !!exec.count + 1 + !export_size;
 				alloc.size = 0;
 				alloc.buffer_select = SQ_MEMORY;
 				need_alloc = num != 33;
@@ -436,6 +374,15 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 		}
 
 		if (need_alloc) {
+			if (alloc.buffer_select == SQ_MEMORY && !export_size) {
+				instr_cf_alloc_t alloc = {};
+				alloc.opc = ALLOC;
+				alloc.size = 0;
+				alloc.buffer_select = SQ_PARAMETER_PIXEL;
+				*cf++ = *(instr_cf_t*) &alloc;
+				export_size = -1;
+			}
+
 			*cf++ = *(instr_cf_t*) &alloc;
 			need_alloc = false;
 		}
@@ -445,11 +392,10 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 
 		if (instr->instr_type == IR2_FETCH)
 			exec.serialize |= 0x1 << exec.count * 2;
-		if (instr->sync)
+		if (instr->sync || 1)
 			exec.serialize |= 0x2 << exec.count * 2;
 		 exec.count += 1;
 	}
-
 
 	exec.opc = !export_size ? EXEC : EXEC_END;
 	*cf++ = *(instr_cf_t*) &exec;
@@ -481,6 +427,8 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	shader->instr_count = instr_count;
 	shader->max_reg = max_reg;
 	shader->heap_idx = heap_idx;
+
+	info->first_export32 = first_export32;
 
 	/* offset cf addrs */
 	for (idx = 0; idx < num_cfs; idx++) {
@@ -752,39 +700,49 @@ static int instr_emit(struct ir2_instruction *instr, uint32_t *dwords,
 struct ir2_dst_register * ir2_dst_create(struct ir2_instruction *instr,
 		int num, const char *swizzle, int flags)
 {
+	struct ir2_shader *shader = instr->shader;
+	int idx;
+
 	if (!(flags & IR2_REG_EXPORT)) {
-		struct ir2_register *reg = &instr->shader->reg[num];
+		idx = shader->regremap[num];
+		if (!idx || (!strcmp(swizzle, "xyzw") && !instr->pred)) {
+			idx = shader->max_reg + 1;
+			if (idx <= 16)
+				idx = 16;
 
-		unsigned i;
-		for (i = instr->shader->max_reg + 1; i <= num; i++)
-			instr->shader->reg[i].write_idx = -1;
-		instr->shader->max_reg = i - 1;
+			shader->regremap[num] = idx;
+			shader->max_reg = idx;
 
-		if (reg->write_idx < 0)
-            reg->write_idx = instr->idx;
-		reg->write_idx2 = instr->idx;
+			shader->reg[idx].write_idx = instr->idx;
+		}
+		num = idx;
+		shader->reg[idx].write_idx2 = instr->idx;
 	}
 
 	struct ir2_dst_register *reg = &instr->dst_reg;
 	reg->flags = flags;
 	reg->num = num;
-	reg->swizzle = ir2_strdup(instr->shader, swizzle);
+	reg->swizzle = ir2_strdup(shader, swizzle);
 	return reg;
 }
 
 struct ir2_src_register * ir2_reg_create(struct ir2_instruction *instr,
 		int num, const char *swizzle, int flags)
 {
+	struct ir2_shader *shader = instr->shader;
+	int idx;
+
 	assert(instr->src_reg_count + 1 <= ARRAY_SIZE(instr->src_reg));
 	if (!(flags & IR2_REG_CONST)) {
-		struct ir2_register *reg = &instr->shader->reg[num];
-
-		reg->read_idx = instr->idx;
-
-		unsigned i;
-		for (i = instr->shader->max_reg + 1; i <= num; i++)
-			instr->shader->reg[i].write_idx = -1;
-		instr->shader->max_reg = i - 1;
+		if (!(flags & IR2_REG_INPUT)) {
+			idx = shader->regremap[num];
+			assert(idx);
+			num = idx;
+		} else {
+			shader->reg[num].write_idx = -1;
+			shader->reg[num].write_idx2 = -1;
+		}
+		shader->reg[num].read_idx = instr->idx;
 	}
 
 	struct ir2_src_register *reg = &instr->src_reg[instr->src_reg_count++];
