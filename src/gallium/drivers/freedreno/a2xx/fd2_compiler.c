@@ -186,6 +186,7 @@ compile_init(struct fd2_compile_context *ctx, struct fd_program_stateobj *prog,
 					switch (name) {
 					case TGSI_SEMANTIC_COLOR:
 					case TGSI_SEMANTIC_GENERIC:
+					case TGSI_SEMANTIC_POSITION:
 						ctx->num_param++;
 						break;
 					default:
@@ -325,6 +326,8 @@ add_dst_reg(struct fd2_compile_context *ctx, struct ir2_instruction *alu,
 					num = ctx->prog->num_exports;
 			}
 		} else {
+			/* write to gl_FragCoord.z not possible */
+			assert(ctx->output_export_idx[dst->Index] != TGSI_SEMANTIC_POSITION);
 			num = dst->Index;
 		}
 		break;
@@ -1103,6 +1106,7 @@ compile_extra_exports(struct fd2_compile_context *ctx)
 {
 	struct ir2_shader *shader = ctx->so->ir;
 	struct ir2_instruction *instr;
+	int fragcoord = ctx->prog->export_linkage[TGSI_SEMANTIC_POSITION];
 	int position = ctx->num_regs[TGSI_FILE_INPUT] + 1;
 	unsigned i;
 	/* XXX hacky way to get new temporaries */
@@ -1121,6 +1125,18 @@ compile_extra_exports(struct fd2_compile_context *ctx)
 	ir2_reg_create(instr, position, "xyzw", 0);
 	ir2_reg_create(instr, tmp, "wwww", 0);
 	ir2_dst_create(instr, tmp + 1, "xyzw", 0);
+
+	if (fragcoord != 0xff) {
+		instr = ir2_instr_create_alu_v(shader, MULADDv);
+		ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
+		ir2_reg_create(instr, tmp + 1, "xyzw", 0);
+		ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
+		ir2_dst_create(instr, fragcoord, "xyz_", IR2_REG_EXPORT);
+
+		instr = ir2_instr_create_alu_s(shader, MAXs);
+		ir2_reg_create(instr, tmp, "wwww", 0);
+		ir2_dst_create(instr, fragcoord, "___w", IR2_REG_EXPORT);
+	}
 
 	/* these two instructions could be avoided with constant folding
 	 * but it would be hard to implement..
