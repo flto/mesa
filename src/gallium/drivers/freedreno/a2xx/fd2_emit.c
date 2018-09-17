@@ -276,6 +276,20 @@ fd2_emit_state(struct fd_context *ctx, const enum fd_dirty_3d_state dirty)
 				A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
 				A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
 				A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
+
+		/* set C65/C66, for viewport calculation in shader */
+		OUT_PKT3(ring, CP_SET_CONSTANT, 9);
+		OUT_RING(ring, 0x00000184);
+
+		OUT_RING(ring, fui(ctx->viewport.translate[0]));
+		OUT_RING(ring, fui(ctx->viewport.translate[1]));
+		OUT_RING(ring, fui(ctx->viewport.translate[2]));
+		OUT_RING(ring, fui(0.0f));
+
+		OUT_RING(ring, fui(ctx->viewport.scale[0]));
+		OUT_RING(ring, fui(ctx->viewport.scale[1]));
+		OUT_RING(ring, fui(ctx->viewport.scale[2]));
+		OUT_RING(ring, fui(0.0f));
 	}
 
 	if (dirty & (FD_DIRTY_PROG | FD_DIRTY_VTXSTATE | FD_DIRTY_TEXSTATE)) {

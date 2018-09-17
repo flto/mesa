@@ -48,6 +48,8 @@ create_shader(enum shader_t type)
 	if (!so)
 		return NULL;
 	so->type = type;
+	so->info.num_exports = 1;
+	so->info.cf_export32 = -1;
 	return so;
 }
 
@@ -66,7 +68,7 @@ static struct fd2_shader_stateobj *
 assemble(struct fd2_shader_stateobj *so)
 {
 	free(so->bin);
-	so->bin = ir2_shader_assemble(so->ir, &so->info);
+	so->bin = ir2_shader_assemble(so->ir, &so->info, 0);
 	if (!so->bin)
 		goto fail;
 
@@ -103,6 +105,8 @@ compile(struct fd_program_stateobj *prog, struct fd2_shader_stateobj *so)
 	 */
 
 	so->info.sizedwords = 0;
+	/* num_exports value is for vertex shader.. */
+	so->info.num_exports = so->type == SHADER_VERTEX ? prog->num_exports : 32;
 
 	return so;
 

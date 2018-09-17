@@ -177,10 +177,8 @@ static bool sets_pred(struct ir2_instruction *instr)
 		instr->alu_scalar.opc <= PRED_SET_RESTOREs;
 }
 
-
-
 void* ir2_shader_assemble(struct ir2_shader *shader,
-		struct ir2_shader_info *info)
+		struct ir2_shader_info *info, bool a20x_binning)
 {
 	/* NOTES
 	 * blob compiler seems to always puts PRED_* instrs in a CF by
@@ -201,9 +199,13 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	 */
 
 	/* mask of exports that must be generated
-	 * used to avoid calculating ps exports with hw binning
-	*/
-	uint64_t export = ~0ull;
+	 * low 32 exports are regular exports, disabled for binning shader
+	 * exports 32/33 are only used in the a20x binning shader
+	 * exports 62/63 are position/size outputs
+	 */
+	uint64_t export = 3ull << 62 | (a20x_binning ?
+		3ull << 32 : ((1ull << info->num_exports) - 1));
+
 	/* bitmask of variables required for exports defined by "export" */
 	uint32_t export_mask[REG_MASK/32+1] = {};
 
@@ -253,11 +255,18 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			}
 
 			/* update dependencies */
-			uint32_t *mask = (dst_reg.flags & IR2_REG_EXPORT) ?
-					export_mask : shader->reg[dst_reg.num].regmask;
+			uint32_t *mask = shader->reg[dst_reg.num].regmask;
+			if (dst_reg.flags & IR2_REG_EXPORT) {
+				mask = export_mask;
+				if (!(export & (1ull << dst_reg.num)))
+					continue;
+			}
+
 			mask_set(mask, reg, num);
-			if (sets_pred(instr))
+			if (sets_pred(instr)) {
 				mask_set(export_mask, reg, num);
+				mask_set(export_mask, reg, dst_reg.num);
+			}
 		}
 	}
 
@@ -271,6 +280,13 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	for (reg_idx = 0; reg_idx <= max_input; reg_idx++)
 		shader->reg[reg_idx].reg = reg_idx;
 	info->max_reg = max_input;
+
+	/* R2 contains the vertex index */
+	if (a20x_binning) {
+		shader->reg[IR2_REG_VERT_ID].reg = 2;
+		info->max_reg = MAX2(info->max_reg, 2);
+		export_size = 0;
+	}
 
 	/* CF instr state */
 	instr_cf_exec_t exec = { .opc = EXEC };
@@ -312,6 +328,14 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 				need_alloc = export_size >= 0;
 				export_size = -1;
 			} else if (num == 32 || num == 33) {
+				if (info->cf_export32 == -1) {
+					/* current idx (cf - cfs) + possible exec clause
+					 * + alloc clause + pixel parameter alloc
+
+					 */
+					info->cf_export32 =
+						(cf - cfs + !!exec.count + 1 + !export_size) / 2 * 3;
+				}
 				alloc.size = 0;
 				alloc.buffer_select = SQ_MEMORY;
 				need_alloc = num != 33;
@@ -343,7 +367,25 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 		}
 
 		if (need_alloc) {
+			/* need to emit the required pixel output before memory exports
+			 * since the shader will be cut off with patching
+			 */
+			if (alloc.buffer_select == SQ_MEMORY && !export_size) {
+				instr_cf_alloc_t alloc = {};
+				alloc.opc = ALLOC;
+				alloc.size = 0;
+				alloc.buffer_select = SQ_PARAMETER_PIXEL;
+				*cf++ = *(instr_cf_t*) &alloc;
+				export_size = -1;
+			}
+
 			*cf++ = *(instr_cf_t*) &alloc;
+
+			if (alloc.buffer_select == SQ_MEMORY && info->cf_export32 == -1) {
+				/* dword offset, rounded down to a pair of cfs */
+				info->cf_export32 = (cf - cfs) / 2 * 3;
+			}
+
 			need_alloc = false;
 		}
 
@@ -356,7 +398,6 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 			exec.serialize |= 0x2 << exec.count * 2;
 		 exec.count += 1;
 	}
-
 
 	exec.opc = !export_size ? EXEC : EXEC_END;
 	*cf++ = *(instr_cf_t*) &exec;
@@ -419,7 +460,6 @@ struct ir2_instruction * ir2_instr_create(struct ir2_shader *shader,
 	shader->instr[shader->instr_count++] = instr;
 	return instr;
 }
-
 
 /*
  * FETCH instructions:

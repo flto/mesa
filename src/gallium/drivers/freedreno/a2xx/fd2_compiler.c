@@ -294,7 +294,7 @@ get_temp_gpr(struct fd2_compile_context *ctx, int idx)
 {
 	unsigned num = idx + ctx->num_regs[TGSI_FILE_INPUT];
 	if (ctx->type == PIPE_SHADER_VERTEX)
-		num++;
+		num += 2; /* vertex fetch input / position temp */
 	return num;
 }
 
@@ -310,12 +310,19 @@ add_dst_reg(struct fd2_compile_context *ctx, struct ir2_instruction *alu,
 		flags |= IR2_REG_EXPORT;
 		if (ctx->type == PIPE_SHADER_VERTEX) {
 			if (dst->Index == ctx->position) {
-				num = 62;
+				/* position needed for fragcoord / a20x hw binning
+				 * write to a temp reg instead
+				 */
+				num = ctx->num_regs[TGSI_FILE_INPUT] + 1;
+				flags &= ~IR2_REG_EXPORT;
 			} else if (dst->Index == ctx->psize) {
 				num = 63;
 			} else {
-				num = export_linkage(ctx,
-						ctx->output_export_idx[dst->Index]);
+				num = ctx->prog->export_linkage[
+						ctx->output_export_idx[dst->Index]];
+				/* not used by fragment shader - ir-a2xx will clean it up */
+				if (num == 0xff)
+					num = ctx->prog->num_exports;
 			}
 		} else {
 			num = dst->Index;
@@ -1091,6 +1098,60 @@ compile_instructions(struct fd2_compile_context *ctx)
 	}
 }
 
+static void
+compile_extra_exports(struct fd2_compile_context *ctx)
+{
+	struct ir2_shader *shader = ctx->so->ir;
+	struct ir2_instruction *instr;
+	int position = ctx->num_regs[TGSI_FILE_INPUT] + 1;
+	unsigned i;
+	/* XXX hacky way to get new temporaries */
+	unsigned tmp = shader->max_reg + 1;
+
+	instr = ir2_instr_create_alu_v(shader, MAXv);
+	ir2_reg_create(instr, position, "xyzw", 0);
+	ir2_reg_create(instr, position, "xyzw", 0);
+	ir2_dst_create(instr, 62, "xyzw", IR2_REG_EXPORT);
+
+	instr = ir2_instr_create_alu_s(shader, RECIP_CLAMP);
+	ir2_reg_create(instr, position, "xyzw", 0);
+	ir2_dst_create(instr, tmp, "___w", 0);
+
+	instr = ir2_instr_create_alu_v(shader, MULv);
+	ir2_reg_create(instr, position, "xyzw", 0);
+	ir2_reg_create(instr, tmp, "wwww", 0);
+	ir2_dst_create(instr, tmp + 1, "xyzw", 0);
+
+	/* these two instructions could be avoided with constant folding
+	 * but it would be hard to implement..
+	 */
+	instr = ir2_instr_create_alu_v(shader, MULADDv);
+	ir2_reg_create(instr, 66, "xyzw", IR2_REG_CONST);
+	ir2_reg_create(instr, tmp + 1, "xyzw", 0);
+	ir2_reg_create(instr, 65, "xyzw", IR2_REG_CONST);
+	ir2_dst_create(instr, tmp + 2, "xyzw", 0);
+
+	instr = ir2_instr_create_alu_v(shader, ADDv);
+	ir2_reg_create(instr, 64, "xxxx", IR2_REG_CONST);
+	ir2_reg_create(instr, 15, "xxxx", IR2_REG_INPUT);
+	ir2_dst_create(instr, tmp + 3, "x___", 0);
+
+	/* 8 max set in freedreno_screen.. unneeded instrs patched out */
+	for (i = 0; i < 8; i++) {
+		instr = ir2_instr_create_alu_v(shader, MULADDv);
+		ir2_reg_create(instr, 1, "wyww", IR2_REG_CONST);
+		ir2_reg_create(instr, tmp + 3, "xxxx", 0);
+		ir2_reg_create(instr, 3 + i, "xyzw", IR2_REG_CONST);
+		ir2_dst_create(instr, 32, "xyzw", IR2_REG_EXPORT);
+
+		instr = ir2_instr_create_alu_v(shader, MULADDv);
+		ir2_reg_create(instr, 68 + i * 2, "xyzw", IR2_REG_CONST);
+		ir2_reg_create(instr, tmp + 2, "xyzw", 0);
+		ir2_reg_create(instr, 67 + i * 2, "xyzw", IR2_REG_CONST);
+		ir2_dst_create(instr, 33, "xyzw", IR2_REG_EXPORT);
+	}
+}
+
 int
 fd2_compile_shader(struct fd_program_stateobj *prog,
 		struct fd2_shader_stateobj *so)
@@ -1113,6 +1174,9 @@ fd2_compile_shader(struct fd_program_stateobj *prog,
 	}
 
 	compile_instructions(&ctx);
+
+	if (ctx.type == PIPE_SHADER_VERTEX)
+		compile_extra_exports(&ctx);
 
 	compile_free(&ctx);
 
