@@ -115,10 +115,19 @@ struct ir2_instruction {
 	};
 };
 
+enum {
+	IR2_REG_INPUT0 = 0,
+	IR2_REG_VERT_ID = 15, /* vertex id generated for a20x binning */
+	IR2_REG_TEMP0 = 16,
+};
+
 struct ir2_shader {
 	unsigned instr_count;
 	int max_reg;
 	struct ir2_register reg[REG_MASK+1];
+
+	/* table to translate TGSI ids to our ids */
+	int tgsi_reg_map[256];
 
 	struct ir2_instruction *instr[0x200];
 	uint32_t heap[100 * 4096];

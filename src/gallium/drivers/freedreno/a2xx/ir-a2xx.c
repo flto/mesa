@@ -653,39 +653,50 @@ static int instr_emit(struct ir2_instruction *instr, uint32_t *dwords,
 struct ir2_dst_register * ir2_dst_create(struct ir2_instruction *instr,
 		int num, const char *swizzle, int flags)
 {
+	struct ir2_shader *shader = instr->shader;
+	int idx;
+
 	if (!(flags & IR2_REG_EXPORT)) {
-		struct ir2_register *reg = &instr->shader->reg[num];
+		idx = shader->tgsi_reg_map[num];
+		if (!idx || (!strcmp(swizzle, "xyzw") && !instr->pred)) {
+			idx = shader->max_reg + 1;
+			/* start indices at IR2_REG_TEMP0 */
+			if (idx <= IR2_REG_TEMP0)
+				idx = IR2_REG_TEMP0;
 
-		unsigned i;
-		for (i = instr->shader->max_reg + 1; i <= num; i++)
-			instr->shader->reg[i].write_idx = -1;
-		instr->shader->max_reg = i - 1;
+			shader->tgsi_reg_map[num] = idx;
+			shader->max_reg = idx;
 
-		if (reg->write_idx < 0)
-            reg->write_idx = instr->idx;
-		reg->write_idx2 = instr->idx;
+			shader->reg[idx].write_idx = instr->idx;
+		}
+		num = idx;
+		shader->reg[idx].write_idx2 = instr->idx;
 	}
 
 	struct ir2_dst_register *reg = &instr->dst_reg;
 	reg->flags = flags;
 	reg->num = num;
-	reg->swizzle = ir2_strdup(instr->shader, swizzle);
+	reg->swizzle = ir2_strdup(shader, swizzle);
 	return reg;
 }
 
 struct ir2_src_register * ir2_reg_create(struct ir2_instruction *instr,
 		int num, const char *swizzle, int flags)
 {
+	struct ir2_shader *shader = instr->shader;
+	int idx;
+
 	assert(instr->src_reg_count + 1 <= ARRAY_SIZE(instr->src_reg));
 	if (!(flags & IR2_REG_CONST)) {
-		struct ir2_register *reg = &instr->shader->reg[num];
-
-		reg->read_idx = instr->idx;
-
-		unsigned i;
-		for (i = instr->shader->max_reg + 1; i <= num; i++)
-			instr->shader->reg[i].write_idx = -1;
-		instr->shader->max_reg = i - 1;
+		if (!(flags & IR2_REG_INPUT)) {
+			idx = shader->tgsi_reg_map[num];
+			assert(idx);
+			num = idx;
+		} else {
+			shader->reg[num].write_idx = -1;
+			shader->reg[num].write_idx2 = -1;
+		}
+		shader->reg[num].read_idx = instr->idx;
 	}
 
 	struct ir2_src_register *reg = &instr->src_reg[instr->src_reg_count++];
