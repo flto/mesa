@@ -77,31 +77,56 @@ emit_vertexbufs(struct fd_context *ctx)
 	// CONST(20,0) (or CONST(26,0) in soliv_vp)
 
 	fd2_emit_vertex_bufs(ctx->batch->draw, 0x78, bufs, vtx->num_elements);
+	fd2_emit_vertex_bufs(ctx->batch->binning, 0x78, bufs, vtx->num_elements);
 }
 
-static bool
-fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
-             unsigned index_offset)
+static void
+draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
+		   struct fd_ringbuffer *ring, unsigned index_offset,
+		   bool binning)
 {
-	struct fd_ringbuffer *ring = ctx->batch->draw;
-
-	if (ctx->dirty & FD_DIRTY_VTXBUF)
-		emit_vertexbufs(ctx);
-
-	fd2_emit_state(ctx, ctx->dirty);
+	enum pc_di_vis_cull_mode vismode;
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_INDX_OFFSET));
-	OUT_RING(ring, info->start);
+	OUT_RING(ring, info->index_size ? 0 : info->start);
 
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
-	OUT_RING(ring, 0x0000003b);
+	/* in the binning batch, thid value is set once in fd2_emit_tile_init */
+	if (!binning) {
+		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+		OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
+		/* XXX do this for every REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL write ?
+		 * if set to 0x3b on a20x, clipping is broken
+		 */
+		OUT_RING(ring, is_a20x(ctx->screen) ? 0x00000002 : 0x0000003b);
+	}
 
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
 
-	if (!is_a20x(ctx->screen)) {
+	if (is_a20x(ctx->screen)) {
+		/* wait for DMA to finish and
+		 * dummy draw one triangle with indexes 0,0,0.
+		 * with PRE_FETCH_CULL_ENABLE | GRP_CULL_ENABLE.
+		 *
+		 * this workaround is for a HW bug related to DMA alignment:
+		 * it is necessary for indexed draws and possibly also
+		 * draws that read binning data
+		 */
+		OUT_PKT3(ring, CP_WAIT_REG_EQ, 4);
+		OUT_RING(ring, 0x000005d0); /* RBBM_STATUS */
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x00001000); /* bit: 12: VGT_BUSY_NO_DMA */
+		OUT_RING(ring, 0x00000001);
+
+		OUT_PKT3(ring, CP_DRAW_INDX_BIN, 6);
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x0003c004);
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, 0x00000003);
+		OUT_RELOC(ring, fd_resource(fd2_context(ctx)->solid_vertexbuf)->bo, 0x80, 0, 0);
+		OUT_RING(ring, 0x00000006);
+	} else {
 		OUT_WFI (ring);
 
 		OUT_PKT3(ring, CP_SET_CONSTANT, 3);
@@ -110,14 +135,44 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 		OUT_RING(ring, info->min_index);        /* VGT_MIN_VTX_INDX */
 	}
 
-	fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
-				 IGNORE_VISIBILITY, info, index_offset);
+	/* C64 holds offset to use for binning data */
+	if (binning && is_a20x(ctx->screen)) {
+		OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+		OUT_RING(ring, 0x00000180);
+		OUT_RING(ring, fui(ctx->batch->num_vertices));
+		OUT_RING(ring, fui(0.0f));
+		OUT_RING(ring, fui(0.0f));
+		OUT_RING(ring, fui(0.0f));
+	}
 
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_UNKNOWN_2010));
-	OUT_RING(ring, 0x00000000);
+	vismode = binning ? IGNORE_VISIBILITY : USE_VISIBILITY;
+	/* a22x hw binning not implemented */
+	if (binning || !is_a20x(ctx->screen) || (fd_mesa_debug & FD_DBG_NOBIN))
+		vismode = IGNORE_VISIBILITY;
+
+	fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
+			vismode, info, index_offset);
+
+	/* necessary workaround.. gpu might hang without it */
+	if (is_a20x(ctx->screen) && vismode == USE_VISIBILITY)
+		OUT_WFI(ring);
 
 	emit_cacheflush(ring);
+}
+
+
+static bool
+fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
+             unsigned index_offset)
+{
+	if (ctx->dirty & FD_DIRTY_VTXBUF)
+		emit_vertexbufs(ctx);
+
+	fd2_emit_state(ctx, ctx->batch->draw, ctx->dirty);
+	fd2_emit_state(ctx, ctx->batch->binning, ctx->dirty);
+
+	draw_impl(ctx, pinfo, ctx->batch->draw, index_offset, false);
+	draw_impl(ctx, pinfo, ctx->batch->binning, index_offset, true);
 
 	fd_context_all_clean(ctx);
 
@@ -138,7 +193,7 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 		colr = pack_rgba(PIPE_FORMAT_R8G8B8A8_UNORM, color->f);
 
 	/* emit generic state now: */
-	fd2_emit_state(ctx, ctx->dirty &
+	fd2_emit_state(ctx, ring, ctx->dirty &
 			(FD_DIRTY_BLEND | FD_DIRTY_VIEWPORT |
 					FD_DIRTY_FRAMEBUFFER | FD_DIRTY_SCISSOR));
 
@@ -154,7 +209,7 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
 	OUT_RING(ring, 0x0000028f);
 
-	fd2_program_emit(ring, &ctx->solid_prog);
+	fd2_program_emit(ctx->batch, ring, &ctx->solid_prog);
 
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);

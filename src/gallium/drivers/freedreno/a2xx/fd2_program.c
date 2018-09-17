@@ -65,10 +65,10 @@ delete_shader(struct fd2_shader_stateobj *so)
 }
 
 static struct fd2_shader_stateobj *
-assemble(struct fd2_shader_stateobj *so)
+assemble(struct fd2_shader_stateobj *so, bool a20x_binning)
 {
 	free(so->bin);
-	so->bin = ir2_shader_assemble(so->ir, &so->info, 0);
+	so->bin = ir2_shader_assemble(so->ir, &so->info, a20x_binning);
 	if (!so->bin)
 		goto fail;
 
@@ -117,18 +117,25 @@ fail:
 }
 
 static void
-emit(struct fd_ringbuffer *ring, struct fd2_shader_stateobj *so)
+emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
+		struct fd2_shader_stateobj *so)
 {
+	bool binning = ring == batch->binning;
+	bool a20x_binning = binning && is_a20x(batch->ctx->screen);
 	unsigned i;
 
 	if (so->info.sizedwords == 0)
-		assemble(so);
+		assemble(so, a20x_binning);
 
 	OUT_PKT3(ring, CP_IM_LOAD_IMMEDIATE, 2 + so->info.sizedwords);
 	OUT_RING(ring, (so->type == SHADER_VERTEX) ? 0 : 1);
 	OUT_RING(ring, so->info.sizedwords);
-	for (i = 0; i < so->info.sizedwords; i++)
-		OUT_RING(ring, so->bin[i]);
+	for (i = 0; i < so->info.sizedwords; i++) {
+		if (a20x_binning && i == so->info.cf_export32)
+			OUT_RINGP(ring, so->bin[i], &batch->draw_patches);
+		else
+			OUT_RING(ring, so->bin[i]);
+	}
 }
 
 static void *
@@ -273,7 +280,7 @@ fd2_program_validate(struct fd_context *ctx)
 }
 
 void
-fd2_program_emit(struct fd_ringbuffer *ring,
+fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 		struct fd_program_stateobj *prog)
 {
 	struct ir2_shader_info *vsi =
@@ -281,9 +288,12 @@ fd2_program_emit(struct fd_ringbuffer *ring,
 	struct ir2_shader_info *fsi =
 		&((struct fd2_shader_stateobj *)prog->fp)->info;
 	uint8_t vs_gprs, fs_gprs, vs_export;
+	bool binning = ring == batch->binning;
+	bool a20x_binning = binning && is_a20x(batch->ctx->screen);
 
-	emit(ring, prog->vp);
-	emit(ring, prog->fp);
+	emit(batch, ring, prog->vp);
+	if (!binning)
+		emit(batch, ring, prog->fp);
 
 	vs_gprs = (vsi->max_reg < 0) ? 0x80 : vsi->max_reg;
 	fs_gprs = (fsi->max_reg < 0) ? 0x80 : fsi->max_reg;
@@ -292,11 +302,13 @@ fd2_program_emit(struct fd_ringbuffer *ring,
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_SQ_PROGRAM_CNTL));
 	OUT_RING(ring, A2XX_SQ_PROGRAM_CNTL_PS_EXPORT_MODE(POSITION_2_VECTORS_SPRITE) |
+			A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_MODE(0) |
 			A2XX_SQ_PROGRAM_CNTL_VS_RESOURCE |
 			A2XX_SQ_PROGRAM_CNTL_PS_RESOURCE |
 			A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_COUNT(vs_export) |
 			A2XX_SQ_PROGRAM_CNTL_PS_REGS(fs_gprs) |
-			A2XX_SQ_PROGRAM_CNTL_VS_REGS(vs_gprs));
+			A2XX_SQ_PROGRAM_CNTL_VS_REGS(vs_gprs) |
+			(a20x_binning ? A2XX_SQ_PROGRAM_CNTL_GEN_INDEX_VTX : 0));
 }
 
 /* Creates shader:
@@ -328,7 +340,7 @@ create_blit_fp(void)
 	ir2_reg_create(instr, 0, NULL, 0);
 	ir2_reg_create(instr, 0, NULL, 0);
 
-	return assemble(so);
+	return assemble(so, false);
 }
 
 /* Creates shader:
@@ -374,7 +386,7 @@ create_blit_vp(void)
 	ir2_reg_create(instr, 1, NULL, 0);
 	ir2_reg_create(instr, 1, NULL, 0);
 
-	return assemble(so);
+	return assemble(so, false);
 }
 
 /* Creates shader:
@@ -398,7 +410,7 @@ create_solid_fp(void)
 	ir2_reg_create(instr, 0, NULL, IR2_REG_CONST);
 	ir2_reg_create(instr, 0, NULL, IR2_REG_CONST);
 
-	return assemble(so);
+	return assemble(so, false);
 }
 
 /* Creates shader:
@@ -431,8 +443,7 @@ create_solid_vp(void)
 	ir2_reg_create(instr, 1, NULL, 0);
 	ir2_reg_create(instr, 1, NULL, 0);
 
-
-	return assemble(so);
+	return assemble(so, false);
 }
 
 void

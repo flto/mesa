@@ -72,7 +72,7 @@ struct fd2_shader_stateobj {
 	} immediates[64];
 };
 
-void fd2_program_emit(struct fd_ringbuffer *ring,
+void fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 		struct fd_program_stateobj *prog);
 void fd2_program_validate(struct fd_context *ctx);
 
