@@ -209,8 +209,8 @@ void* ir2_shader_assemble(struct ir2_shader *shader,
 	/* bitmask of variables required for exports defined by "export" */
 	uint32_t export_mask[REG_MASK/32+1] = {};
 
-	unsigned idx, reg_idx;
-	unsigned max_input = 0;
+	int idx, reg_idx;
+	int max_input = -1;
 	int export_size = -1;
 
 	for (idx = 0; idx < shader->instr_count; idx++) {
