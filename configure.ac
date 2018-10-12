@@ -2828,8 +2828,8 @@ AM_CONDITIONAL(HAVE_SWR_BUILTIN, test "x$HAVE_SWR_BUILTIN" = xyes)
 
 dnl We need to validate some needed dependencies for renderonly drivers.
 
-if test "x$HAVE_GALLIUM_ETNAVIV" != xyes -a "x$HAVE_GALLIUM_IMX" = xyes  ; then
-    AC_MSG_ERROR([Building with imx requires etnaviv])
+if test "x$HAVE_GALLIUM_ETNAVIV" != xyes -a "x$HAVE_GALLIUM_FREEDRENO" != xyes -a "x$HAVE_GALLIUM_IMX" = xyes  ; then
+    AC_MSG_ERROR([Building with imx requires etnaviv or freedreno])
 fi
 
 if test "x$HAVE_GALLIUM_VC4" != xyes -a "x$HAVE_GALLIUM_PL111" = xyes  ; then

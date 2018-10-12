@@ -28,8 +28,17 @@ AM_CFLAGS = \
 	-I$(top_srcdir)/src/gallium/winsys \
 	$(GALLIUM_WINSYS_CFLAGS)
 
+if HAVE_GALLIUM_ETNAVIV
+AM_CFLAGS += -DGALLIUM_ETNAVIV
+endif
+
+if HAVE_GALLIUM_FREEDRENO
+AM_CFLAGS += -DGALLIUM_FREEDRENO
+endif
+
 noinst_LTLIBRARIES = libimxdrm.la
 
 libimxdrm_la_SOURCES = $(C_SOURCES)
 
 EXTRA_DIST = meson.build
+

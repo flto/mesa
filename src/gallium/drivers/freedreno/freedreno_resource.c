@@ -645,6 +645,9 @@ fd_resource_destroy(struct pipe_screen *pscreen,
 	fd_bc_invalidate_resource(rsc, true);
 	if (rsc->bo)
 		fd_bo_del(rsc->bo);
+	if (rsc->scanout)
+		renderonly_scanout_destroy(rsc->scanout, fd_screen(pscreen)->ro);
+
 	util_range_destroy(&rsc->valid_buffer_range);
 	FREE(rsc);
 }
@@ -657,9 +660,26 @@ fd_resource_get_handle(struct pipe_screen *pscreen,
 		unsigned usage)
 {
 	struct fd_resource *rsc = fd_resource(prsc);
+	struct renderonly_scanout *scanout = rsc->scanout;
+	struct fd_bo *bo = rsc->bo;
 
-	return fd_screen_bo_get_handle(pscreen, rsc->bo,
-			rsc->slices[0].pitch * rsc->cpp, handle);
+	handle->stride = rsc->slices[0].pitch * rsc->cpp;
+
+	if (handle->type == WINSYS_HANDLE_TYPE_SHARED) {
+		return fd_bo_get_name(bo, &handle->handle) == 0;
+	} else if (handle->type == WINSYS_HANDLE_TYPE_KMS) {
+		if (renderonly_get_handle(scanout, handle)) {
+			return TRUE;
+		} else {
+			handle->handle = fd_bo_handle(bo);
+			return TRUE;
+		}
+	} else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
+		handle->handle = fd_bo_dmabuf(bo);
+		return TRUE;
+	} else {
+		return FALSE;
+	}
 }
 
 static uint32_t
@@ -801,8 +821,8 @@ fd_resource_create(struct pipe_screen *pscreen,
 		const struct pipe_resource *tmpl)
 {
 	struct fd_screen *screen = fd_screen(pscreen);
-	struct fd_resource *rsc = CALLOC_STRUCT(fd_resource);
-	struct pipe_resource *prsc = &rsc->base;
+	struct fd_resource *rsc;
+	struct pipe_resource *prsc;
 	enum pipe_format format = tmpl->format;
 	uint32_t size;
 
@@ -812,6 +832,33 @@ fd_resource_create(struct pipe_screen *pscreen,
 			tmpl->width0, tmpl->height0, tmpl->depth0,
 			tmpl->array_size, tmpl->last_level, tmpl->nr_samples,
 			tmpl->usage, tmpl->bind, tmpl->flags);
+
+	if (tmpl->bind & PIPE_BIND_SCANOUT) {
+		struct pipe_resource scanout_templat = *tmpl;
+		struct renderonly_scanout *scanout;
+		struct winsys_handle handle;
+
+		scanout = renderonly_scanout_for_resource(&scanout_templat,
+										screen->ro, &handle);
+		if (!scanout)
+			return NULL;
+
+		assert(handle.type == WINSYS_HANDLE_TYPE_FD);
+		// handle.modifier = modifier;
+		scanout_templat.bind &= ~PIPE_BIND_SCANOUT;
+		rsc = fd_resource(pscreen->resource_from_handle(pscreen, &scanout_templat,
+												&handle,
+												PIPE_HANDLE_USAGE_WRITE));
+		close(handle.handle);
+		if (!rsc)
+			return NULL;
+
+		rsc->scanout = scanout;
+		return &rsc->base;
+	}
+
+	rsc = CALLOC_STRUCT(fd_resource);
+	prsc = &rsc->base;
 
 	if (!rsc)
 		return NULL;

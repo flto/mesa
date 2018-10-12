@@ -26,6 +26,8 @@
 
 #include "imx_drm_public.h"
 #include "etnaviv/drm/etnaviv_drm_public.h"
+#include "freedreno/drm/freedreno_drm_public.h"
+#include "loader/loader.h"
 #include "renderonly/renderonly.h"
 
 #include <fcntl.h>
@@ -36,15 +38,28 @@ struct pipe_screen *imx_drm_screen_create(int fd)
    struct renderonly ro = {
       .create_for_resource = renderonly_create_kms_dumb_buffer_for_resource,
       .kms_fd = fd,
-      .gpu_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC)
    };
+   struct pipe_screen *screen;
 
-   if (ro.gpu_fd < 0)
-      return NULL;
-
-   struct pipe_screen *screen = etna_drm_screen_create_renderonly(&ro);
-   if (!screen)
+#if defined(GALLIUM_ETNAVIV)
+   ro.gpu_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+   if (ro.gpu_fd >= 0) {
+      screen = etna_drm_screen_create_renderonly(&ro);
+      if (screen)
+	     return screen;
       close(ro.gpu_fd);
+   }
+#endif
 
-   return screen;
+#if defined(GALLIUM_FREEDRENO)
+   ro.gpu_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+   if (ro.gpu_fd >= 0) {
+      screen = fd_drm_screen_create_renderonly(&ro);
+      if (screen)
+	     return screen;
+      close(ro.gpu_fd);
+   }
+#endif
+
+   return NULL;
 }

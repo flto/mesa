@@ -36,9 +36,8 @@
 #include "util/u_hash_table.h"
 #include "os/os_thread.h"
 
-#include "freedreno_drm_public.h"
-
 #include "freedreno/freedreno_screen.h"
+#include "freedreno_drm_public.h"
 
 static struct util_hash_table *fd_tab = NULL;
 
@@ -87,7 +86,7 @@ static int compare_fd(void *key1, void *key2)
 }
 
 struct pipe_screen *
-fd_drm_screen_create(int fd)
+fd_drm_screen_create_renderonly(struct renderonly *ro)
 {
 	struct pipe_screen *pscreen = NULL;
 
@@ -98,15 +97,15 @@ fd_drm_screen_create(int fd)
 			goto unlock;
 	}
 
-	pscreen = util_hash_table_get(fd_tab, intptr_to_pointer(fd));
+	pscreen = util_hash_table_get(fd_tab, intptr_to_pointer(ro->gpu_fd));
 	if (pscreen) {
 		fd_screen(pscreen)->refcnt++;
 	} else {
-		struct fd_device *dev = fd_device_new_dup(fd);
+		struct fd_device *dev = fd_device_new_dup(ro->gpu_fd);
 		if (!dev)
 			goto unlock;
 
-		pscreen = fd_screen_create(dev);
+		pscreen = fd_screen_create(dev, ro);
 		if (pscreen) {
 			int fd = fd_device_fd(dev);
 
@@ -124,4 +123,16 @@ fd_drm_screen_create(int fd)
 unlock:
 	mtx_unlock(&fd_screen_mutex);
 	return pscreen;
+}
+
+struct pipe_screen *
+fd_drm_screen_create(int fd)
+{
+	struct renderonly ro = {
+      .create_for_resource = renderonly_create_gpu_import_for_resource,
+      .kms_fd = -1,
+      .gpu_fd = fd
+   };
+
+   return fd_drm_screen_create_renderonly(&ro);
 }
