@@ -529,8 +529,6 @@ dri_flush(__DRIcontext *cPriv,
                  drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
       }
 
-      pipe->flush_resource(pipe, drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
-
       if (pipe->invalidate_resource &&
           (flags & __DRI2_FLUSH_INVALIDATE_ANCILLARY)) {
          if (drawable->textures[ST_ATTACHMENT_DEPTH_STENCIL])
@@ -538,6 +536,8 @@ dri_flush(__DRIcontext *cPriv,
          if (drawable->msaa_textures[ST_ATTACHMENT_DEPTH_STENCIL])
             pipe->invalidate_resource(pipe, drawable->msaa_textures[ST_ATTACHMENT_DEPTH_STENCIL]);
       }
+
+      pipe->flush_resource(pipe, drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
    }
 
    flush_flags = 0;

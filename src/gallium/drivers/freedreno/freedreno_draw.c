@@ -139,6 +139,8 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	if (fd_depth_enabled(ctx)) {
 		if (fd_resource(pfb->zsbuf->texture)->valid)
 			restore_buffers |= FD_BUFFER_DEPTH;
+		else
+			batch->cleared |= FD_BUFFER_DEPTH;
 		buffers |= FD_BUFFER_DEPTH;
 		resource_written(batch, pfb->zsbuf->texture);
 		batch->gmem_reason |= FD_GMEM_DEPTH_ENABLED;
@@ -147,6 +149,8 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	if (fd_stencil_enabled(ctx)) {
 		if (fd_resource(pfb->zsbuf->texture)->valid)
 			restore_buffers |= FD_BUFFER_STENCIL;
+		else
+			batch->cleared |= FD_BUFFER_STENCIL;
 		buffers |= FD_BUFFER_STENCIL;
 		resource_written(batch, pfb->zsbuf->texture);
 		batch->gmem_reason |= FD_GMEM_STENCIL_ENABLED;
@@ -163,10 +167,12 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
 		surf = pfb->cbufs[i]->texture;
 
-		resource_written(batch, surf);
-
 		if (fd_resource(surf)->valid)
 			restore_buffers |= PIPE_CLEAR_COLOR0 << i;
+		else
+			batch->cleared |= PIPE_CLEAR_COLOR0 << i;
+
+		resource_written(batch, surf);
 
 		buffers |= PIPE_CLEAR_COLOR0 << i;
 
