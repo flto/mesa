@@ -311,6 +311,7 @@ get_fb0_attachment(struct gl_context *ctx, struct gl_framebuffer *fb,
    }
 
    switch (attachment) {
+   case GL_COLOR:
    case GL_FRONT_LEFT:
       /* Front buffers can be allocated on the first use, but
        * glGetFramebufferAttachmentParameteriv must work even if that
@@ -4637,6 +4638,8 @@ _mesa_InvalidateNamedFramebufferData(GLuint framebuffer,
                                   "glInvalidateNamedFramebufferData");
 }
 
+#include "state_tracker/st_context.h"
+#include "state_tracker/st_cb_fbo.h"
 
 void GLAPIENTRY
 _mesa_DiscardFramebufferEXT(GLenum target, GLsizei numAttachments,
@@ -4680,8 +4683,24 @@ _mesa_DiscardFramebufferEXT(GLenum target, GLsizei numAttachments,
       }
    }
 
-   if (ctx->Driver.DiscardFramebuffer)
-      ctx->Driver.DiscardFramebuffer(ctx, target, numAttachments, attachments);
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+   bool is_color;
+
+   for (i = 0; i < numAttachments; i++) {
+      const struct gl_renderbuffer_attachment *att = _mesa_is_winsys_fbo(fb) ?
+         get_fb0_attachment(ctx, fb, attachments[i]) :
+         get_attachment(ctx, fb, attachments[i], &is_color);
+      struct gl_renderbuffer *rb = att->Renderbuffer;
+      struct st_renderbuffer *strb = st_renderbuffer(rb);
+      if (!rb)
+		continue;
+
+      pipe->invalidate_resource(pipe, strb->texture);
+   }
+
+   //if (ctx->Driver.DiscardFramebuffer)
+   //   ctx->Driver.DiscardFramebuffer(ctx, target, numAttachments, attachments);
 
    return;
 
