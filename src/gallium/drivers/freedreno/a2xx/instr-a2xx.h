@@ -161,9 +161,9 @@ typedef struct PACKED {
 		};
 		/* constants have full 8-bit index */
 		struct {
-			uint8_t             src3_reg_const   : 8;
-			uint8_t             src2_reg_const   : 8;
-			uint8_t             src1_reg_const   : 8;
+			uint8_t             src3_reg_byte    : 8;
+			uint8_t             src2_reg_byte    : 8;
+			uint8_t             src1_reg_byte    : 8;
 		};
 	};
 	instr_vector_opc_t  vector_opc               : 5;

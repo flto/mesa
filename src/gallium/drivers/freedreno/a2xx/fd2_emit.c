@@ -471,6 +471,22 @@ fd2_emit_restore(struct fd_context *ctx, struct fd_ringbuffer *ring)
 	OUT_RING(ring, 0x3ec00000);
 	OUT_RING(ring, 0x3e800000);
 
+	/* C63 in vertex shader */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+	OUT_RING(ring, 0x0000017c);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+
+	/* C63 in fragment shader */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+	OUT_RING(ring, 0x0000057c);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_MASK));
 	OUT_RING(ring, A2XX_RB_COLOR_MASK_WRITE_RED |

@@ -33,43 +33,44 @@
 
 #include "freedreno_context.h"
 
-#include "ir-a2xx.h"
+#include "ir2.h"
 #include "disasm.h"
 
 struct fd2_shader_stateobj {
+	nir_shader *nir;
 	enum shader_t type;
 
-	uint32_t *bin;
-
-	struct tgsi_token *tokens;
-
-	/* note that we defer compiling shader until we know both vs and ps..
-	 * and if one changes, we potentially need to recompile in order to
-	 * get varying linkages correct:
-	 */
-	struct ir2_shader_info info;
-	struct ir2_shader *ir;
-
-	/* for vertex shaders, the fetch instructions which need to be
-	 * patched up before assembly:
-	 */
-	unsigned num_vfetch_instrs;
-	struct ir2_instruction *vfetch_instrs[64];
-
-	/* for all shaders, any tex fetch instructions which need to be
-	 * patched before assembly:
-	 */
-	unsigned num_tfetch_instrs;
-	struct {
-		unsigned samp_id;
-		struct ir2_instruction *instr;
-	} tfetch_instrs[64];
+	struct ir2_shader_info info[2];
 
 	unsigned first_immediate;     /* const reg # of first immediate */
 	unsigned num_immediates;
 	struct {
 		uint32_t val[4];
+		unsigned ncomp;
 	} immediates[64];
+
+	union {
+		/* vertex shader specific */
+		struct {
+			/* linked fragment shader */
+			struct fd2_shader_stateobj *fp;
+		} v;
+
+		/* fragment shader specific */
+		struct {
+			unsigned inputs_count;
+			struct {
+				uint8_t slot;
+				uint8_t ncomp;
+			} inputs[16 + 2];  /* +POSITION +FACE */
+
+			/* driver_location of fragcoord, -1 if not used */
+			int frag_coord;
+		} f;
+	};
+
+
+
 };
 
 void fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,

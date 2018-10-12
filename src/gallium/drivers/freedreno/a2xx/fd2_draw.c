@@ -165,6 +165,9 @@ static bool
 fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
              unsigned index_offset)
 {
+	if (!ctx->prog.fp || !ctx->prog.vp)
+		return false;
+
 	if (ctx->dirty & FD_DIRTY_VTXBUF)
 		emit_vertexbufs(ctx);
 
