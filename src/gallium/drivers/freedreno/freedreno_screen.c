@@ -898,8 +898,8 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 		screen->gmem_alignh = 32;
 		screen->num_vsc_pipes = 16;
 	} else {
-		screen->gmem_alignw = 32;
-		screen->gmem_alignh = 32;
+		screen->gmem_alignw = 128;
+		screen->gmem_alignh = 128;
 		screen->num_vsc_pipes = 8;
 	}
 

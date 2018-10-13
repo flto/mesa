@@ -34,5 +34,6 @@
 #include "freedreno_draw.h"
 
 void fd2_draw_init(struct pipe_context *pctx);
+void fd2_clear_fast(struct fd_batch *batch);
 
 #endif /* FD2_DRAW_H_ */

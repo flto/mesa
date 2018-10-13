@@ -41,6 +41,7 @@
 #include "fd2_program.h"
 #include "fd2_util.h"
 #include "fd2_zsa.h"
+#include "fd2_draw.h"
 
 static uint32_t fmt2swap(enum pipe_format format)
 {
@@ -147,14 +148,6 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_WINDOW_SCISSOR_TL));
 	OUT_RING(ring, xy2d(0, 0));                       /* PA_SC_WINDOW_SCISSOR_TL */
 	OUT_RING(ring, xy2d(pfb->width, pfb->height));    /* PA_SC_WINDOW_SCISSOR_BR */
-
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
-	OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
-			A2XX_PA_CL_VTE_CNTL_VPORT_X_SCALE_ENA |
-			A2XX_PA_CL_VTE_CNTL_VPORT_X_OFFSET_ENA |
-			A2XX_PA_CL_VTE_CNTL_VPORT_Y_SCALE_ENA |
-			A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA);
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_CLIP_CNTL));
@@ -338,6 +331,15 @@ fd2_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 		emit_mem2gmem_surf(batch, gmem->cbuf_base[0], pfb->cbufs[0]);
 
 	/* TODO blob driver seems to toss in a CACHE_FLUSH after each DRAW_INDX.. */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
+	OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
+			A2XX_PA_CL_VTE_CNTL_VPORT_X_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_X_OFFSET_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Y_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
 }
 
 /* before first tile */
@@ -346,23 +348,16 @@ fd2_emit_tile_init(struct fd_batch *batch)
 {
 	struct fd_context *ctx = batch->ctx;
 	struct fd_ringbuffer *ring = batch->gmem;
-	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 	struct fd_gmem_stateobj *gmem = &ctx->gmem;
-	enum pipe_format format = pipe_surface_format(pfb->cbufs[0]);
-	uint32_t reg;
 	int i;
 
 	fd2_emit_restore(ctx, ring);
 
-	OUT_PKT3(ring, CP_SET_CONSTANT, 4);
-	OUT_RING(ring, CP_REG(REG_A2XX_RB_SURFACE_INFO));
-	OUT_RING(ring, gmem->bin_w);                 /* RB_SURFACE_INFO */
-	OUT_RING(ring, A2XX_RB_COLOR_INFO_SWAP(fmt2swap(format)) |
-			A2XX_RB_COLOR_INFO_FORMAT(fd2_pipe2color(format)));
-	reg = A2XX_RB_DEPTH_INFO_DEPTH_BASE(gmem->zsbuf_base[0]);
-	if (pfb->zsbuf)
-		reg |= A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(fd_pipe2depth(pfb->zsbuf->format));
-	OUT_RING(ring, reg);                         /* RB_DEPTH_INFO */
+	if (batch->fast_clear.buffers) {
+		batch->fast_clear.ring = fd_ringbuffer_new(batch->ctx->pipe, 0x1000);
+		fd_ringbuffer_set_parent(batch->fast_clear.ring, batch->gmem);
+		fd2_clear_fast(batch);
+	}
 
 	if (is_a20x(ctx->screen) && !(fd_mesa_debug & FD_DBG_NOBIN) &&
 		gmem->num_vsc_pipes) {
@@ -458,8 +453,9 @@ fd2_emit_tile_prep(struct fd_batch *batch, struct fd_tile *tile)
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 	enum pipe_format format = pipe_surface_format(pfb->cbufs[0]);
 
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_INFO));
+	OUT_PKT3(ring, CP_SET_CONSTANT, 3);
+	OUT_RING(ring, CP_REG(REG_A2XX_RB_SURFACE_INFO));
+	OUT_RING(ring, batch->ctx->gmem.bin_w);    /* RB_SURFACE_INFO */
 	OUT_RING(ring, A2XX_RB_COLOR_INFO_SWAP(1) | /* RB_COLOR_INFO */
 			A2XX_RB_COLOR_INFO_FORMAT(fd2_pipe2color(format)));
 
@@ -477,14 +473,11 @@ static void
 fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 {
 	struct fd_context *ctx = batch->ctx;
+	struct fd_gmem_stateobj *gmem = &ctx->gmem;
 	struct fd_ringbuffer *ring = batch->gmem;
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 	enum pipe_format format = pipe_surface_format(pfb->cbufs[0]);
-
-	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_INFO));
-	OUT_RING(ring, A2XX_RB_COLOR_INFO_SWAP(fmt2swap(format)) |
-			A2XX_RB_COLOR_INFO_FORMAT(fd2_pipe2color(format)));
+	uint32_t reg;
 
 	/* setup window scissor and offset for current tile (different
 	 * from mem2gmem):
@@ -493,6 +486,29 @@ fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_WINDOW_OFFSET));
 	OUT_RING(ring, A2XX_PA_SC_WINDOW_OFFSET_X(-tile->xoff) |
 			A2XX_PA_SC_WINDOW_OFFSET_Y(-tile->yoff));
+
+	if (batch->fast_clear.buffers) {
+		ctx->emit_ib(batch->gmem, batch->fast_clear.ring);
+
+		/* restore tile-specific registers */
+		OUT_PKT3(ring, CP_SET_CONSTANT, 3);
+		OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_SCREEN_SCISSOR_TL));
+		OUT_RING(ring, A2XX_PA_SC_SCREEN_SCISSOR_TL_X(0) |
+			A2XX_PA_SC_SCREEN_SCISSOR_TL_Y(0));
+		OUT_RING(ring, A2XX_PA_SC_SCREEN_SCISSOR_BR_X(tile->bin_w) |
+			A2XX_PA_SC_SCREEN_SCISSOR_BR_Y(tile->bin_h));
+	}
+
+	/* restore surface params (modified by mem->gmem/fastclear */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 4);
+	OUT_RING(ring, CP_REG(REG_A2XX_RB_SURFACE_INFO));
+	OUT_RING(ring, gmem->bin_w);
+	OUT_RING(ring, A2XX_RB_COLOR_INFO_SWAP(fmt2swap(format)) |
+			A2XX_RB_COLOR_INFO_FORMAT(fd2_pipe2color(format)));
+	reg = A2XX_RB_DEPTH_INFO_DEPTH_BASE(gmem->zsbuf_base[0]);
+	if (pfb->zsbuf)
+		reg |= A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(fd_pipe2depth(pfb->zsbuf->format));
+	OUT_RING(ring, reg);
 
 	if (is_a20x(ctx->screen) && !(fd_mesa_debug & FD_DBG_NOBIN)) {
 		struct fd_vsc_pipe *pipe = &ctx->vsc_pipe[tile->p];

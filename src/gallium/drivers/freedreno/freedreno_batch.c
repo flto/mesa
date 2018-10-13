@@ -77,6 +77,7 @@ batch_init(struct fd_batch *batch)
 	batch->num_draws = 0;
 	batch->num_vertices = 0;
 	batch->stage = FD_STAGE_NULL;
+	batch->fast_clear.buffers = 0;
 
 	fd_reset_wfi(batch);
 
@@ -142,6 +143,10 @@ batch_fini(struct fd_batch *batch)
 	if (batch->lrz_clear) {
 		fd_ringbuffer_del(batch->lrz_clear);
 		batch->lrz_clear = NULL;
+	}
+	if (batch->fast_clear.ring) {
+		fd_ringbuffer_del(batch->fast_clear.ring);
+		batch->fast_clear.ring = NULL;
 	}
 
 	util_dynarray_fini(&batch->draw_patches);

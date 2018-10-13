@@ -203,6 +203,17 @@ struct fd_batch {
 
 	/** set of dependent batches.. holds refs to dependent batches: */
 	uint32_t dependents_mask;
+
+	/* for fast clear path (a2xx) */
+	struct {
+		struct fd_ringbuffer *ring;
+		unsigned buffers;
+		union pipe_color_union color;
+		double depth;
+		unsigned stencil;
+	} fast_clear;
+	unsigned buffers_fast_clear;
+
 };
 
 struct fd_batch * fd_batch_create(struct fd_context *ctx, bool nondraw);

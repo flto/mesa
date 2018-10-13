@@ -269,16 +269,6 @@ fd2_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, fui(ctx->viewport.scale[2]));       /* PA_CL_VPORT_ZSCALE */
 		OUT_RING(ring, fui(ctx->viewport.translate[2]));   /* PA_CL_VPORT_ZOFFSET */
 
-		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-		OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
-		OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
-				A2XX_PA_CL_VTE_CNTL_VPORT_X_SCALE_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_X_OFFSET_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Y_SCALE_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
-
 		/* set C65/C66, for viewport calculation in shader */
 		OUT_PKT3(ring, CP_SET_CONSTANT, 9);
 		OUT_RING(ring, 0x00000184);
@@ -311,7 +301,7 @@ fd2_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_ZSA)) {
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_RB_COLORCONTROL));
-		OUT_RING(ring, blend ? zsa->rb_colorcontrol | blend->rb_colorcontrol : 0);
+		OUT_RING(ring, zsa->rb_colorcontrol | blend->rb_colorcontrol);
 	}
 
 	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_FRAMEBUFFER)) {
@@ -321,13 +311,13 @@ fd2_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_RB_BLEND_CONTROL));
-		OUT_RING(ring, blend ? blend->rb_blendcontrol_alpha |
+		OUT_RING(ring, blend->rb_blendcontrol_alpha |
 			COND(has_alpha, blend->rb_blendcontrol_rgb) |
-			COND(!has_alpha, blend->rb_blendcontrol_no_alpha_rgb) : 0);
+			COND(!has_alpha, blend->rb_blendcontrol_no_alpha_rgb));
 
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_MASK));
-		OUT_RING(ring, blend ? blend->rb_colormask : 0xf);
+		OUT_RING(ring, blend->rb_colormask);
 	}
 
 	if (dirty & FD_DIRTY_BLEND_COLOR) {
@@ -500,6 +490,16 @@ fd2_emit_restore(struct fd_context *ctx, struct fd_ringbuffer *ring)
 	OUT_RING(ring, 0x00000000);        /* RB_BLEND_GREEN */
 	OUT_RING(ring, 0x00000000);        /* RB_BLEND_BLUE */
 	OUT_RING(ring, 0x000000ff);        /* RB_BLEND_ALPHA */
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
+	OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
+			A2XX_PA_CL_VTE_CNTL_VPORT_X_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_X_OFFSET_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Y_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
 }
 
 static void
