@@ -45,7 +45,11 @@ fd2_context_destroy(struct pipe_context *pctx)
 static struct pipe_resource *
 create_solid_vertexbuf(struct pipe_context *pctx)
 {
-	static const float init_shader_const[] = {
+	static const float init_shader_const[128] = {
+			0, 0, 0, 0,
+			0, 0, 0, 0,
+			0, 0, 0, 0,
+			0, 0, 0, 0, // value #15 is SC_SCREEN_SCISSOR_BR
 			/* for clear/gmem2mem: */
 			-1.000000, +1.000000, +1.000000, +1.100000,
 			+1.000000, +1.000000, -1.000000, -1.100000,

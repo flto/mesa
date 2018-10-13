@@ -121,7 +121,7 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 
 	fd2_emit_vertex_bufs(ring, 0x9c, (struct fd2_vertex_buf[]) {
-			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 48 },
+			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 48, .offset = 0x40 },
 		}, 1);
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
@@ -255,8 +255,8 @@ fd2_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 	float x0, y0, x1, y1;
 
 	fd2_emit_vertex_bufs(ring, 0x9c, (struct fd2_vertex_buf[]) {
-			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 48, .offset = 0x30 },
-			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 32, .offset = 0x60 },
+			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 48, .offset = 0x70 },
+			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 32, .offset = 0xa0 },
 		}, 2);
 
 	/* write texture coordinates to vertexbuf: */
@@ -265,7 +265,7 @@ fd2_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 	y0 = ((float)tile->yoff) / ((float)pfb->height);
 	y1 = ((float)tile->yoff + bin_h) / ((float)pfb->height);
 	OUT_PKT3(ring, CP_MEM_WRITE, 9);
-	OUT_RELOC(ring, fd_resource(fd2_ctx->solid_vertexbuf)->bo, 0x60, 0, 0);
+	OUT_RELOC(ring, fd_resource(fd2_ctx->solid_vertexbuf)->bo, 0xa0, 0, 0);
 	OUT_RING(ring, fui(x0));
 	OUT_RING(ring, fui(y0));
 	OUT_RING(ring, fui(x1));
@@ -479,6 +479,56 @@ fd2_emit_tile_init(struct fd_batch *batch)
 		reg |= A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(fd_pipe2depth(pfb->zsbuf->format));
 	OUT_RING(ring, reg);                         /* RB_DEPTH_INFO */
 
+	/* fast clear patches */
+	unsigned clear_lines = gmem->bin_w * gmem->bin_h / 128;
+	unsigned lines;
+	int depth_size = -1;
+	int color_size = -1;
+
+	if (pfb->cbufs[0])
+		color_size = util_format_get_blocksizebits(format) == 32 ? 1 : 0;
+
+	if (pfb->zsbuf)
+		depth_size = fd_pipe2depth(pfb->zsbuf->format);
+
+	for (int i = 0; i < fd_patch_num_elements(&batch->gmem_patches); i++) {
+		struct fd_cs_patch *patch = fd_patch_element(&batch->gmem_patches, i);
+		uint32_t color_base = 0, depth_base = gmem->zsbuf_base[0];
+
+		if (patch->val == 3) { /* restore surface info */
+			patch->cs[2] = gmem->bin_w;
+			patch->cs[3] = A2XX_RB_COLOR_INFO_SWAP(fmt2swap(format)) |
+					A2XX_RB_COLOR_INFO_FORMAT(fd2_pipe2color(format));
+			patch->cs[4] = A2XX_RB_DEPTH_INFO_DEPTH_BASE(gmem->zsbuf_base[0]);
+			if (pfb->zsbuf)
+				patch->cs[4] |= A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(fd_pipe2depth(pfb->zsbuf->format));
+			continue;
+		}
+
+		switch (patch->val) {
+		case 0: /* color-only */
+			lines = clear_lines >> (1 + !color_size);
+			depth_base = color_base + lines * 512;
+			break;
+		case 1: /* depth-only */
+			lines = clear_lines >> (1 + !depth_size);
+			color_base = depth_base;
+			depth_base = depth_base + lines * 512;
+			break;
+		case 2: /* color+depth */
+			lines = clear_lines >> !color_size;
+			break;
+		}
+
+		patch->cs[2] = A2XX_PA_SC_SCREEN_SCISSOR_BR_X(32) |
+			A2XX_PA_SC_SCREEN_SCISSOR_BR_Y(lines);
+		patch->cs[6] = A2XX_RB_COLOR_INFO_BASE(color_base) |
+			A2XX_RB_COLOR_INFO_FORMAT(COLORX_8_8_8_8);
+		patch->cs[7] = A2XX_RB_DEPTH_INFO_DEPTH_BASE(depth_base) |
+			A2XX_RB_DEPTH_INFO_DEPTH_FORMAT(1);
+	}
+	util_dynarray_resize(&batch->gmem_patches, 0);
+
 	/* set to zero, for some reason hardware doesn't certain values */
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_CURRENT_BIN_ID_MIN));
@@ -611,6 +661,7 @@ static void
 fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 {
 	struct fd_context *ctx = batch->ctx;
+	struct fd2_context *fd2_ctx = fd2_context(ctx);
 	struct fd_ringbuffer *ring = batch->gmem;
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 	enum pipe_format format = pipe_surface_format(pfb->cbufs[0]);
@@ -627,6 +678,12 @@ fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_WINDOW_OFFSET));
 	OUT_RING(ring, A2XX_PA_SC_WINDOW_OFFSET_X(-tile->xoff) |
 			A2XX_PA_SC_WINDOW_OFFSET_Y(-tile->yoff));
+
+	/* write SCISSOR_BR to memory so fast clear path can restore from it */
+	OUT_PKT3(ring, CP_MEM_WRITE, 2);
+	OUT_RELOC(ring, fd_resource(fd2_ctx->solid_vertexbuf)->bo, 0x3c, 0, 0);
+	OUT_RING(ring, A2XX_PA_SC_SCREEN_SCISSOR_BR_X(tile->bin_w) |
+			A2XX_PA_SC_SCREEN_SCISSOR_BR_Y(tile->bin_h));
 
 	/* tile offset for gl_FragCoord on a20x (C64 in fragment shader) */
 	if (is_a20x(ctx->screen)) {
