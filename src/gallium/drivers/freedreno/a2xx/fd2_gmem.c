@@ -359,6 +359,15 @@ fd2_emit_tile_init(struct fd_batch *batch)
 		fd2_clear_fast(batch);
 	}
 
+	/* set to zero, for some reason hardware doesn't certain values */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_VGT_CURRENT_BIN_ID_MIN));
+	OUT_RING(ring, 0);
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_VGT_CURRENT_BIN_ID_MAX));
+	OUT_RING(ring, 0);
+
 	if (is_a20x(ctx->screen) && !(fd_mesa_debug & FD_DBG_NOBIN) &&
 		gmem->num_vsc_pipes) {
 		/* patch out unneeded memory exports by setting EXEC_END cf */
