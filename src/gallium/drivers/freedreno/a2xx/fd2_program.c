@@ -187,7 +187,7 @@ patch_vtx_fetch(struct fd_context *ctx, struct pipe_vertex_element *elem,
 	instr->format = fd2_pipe2surface(format);
 	instr->num_format_all = !desc->channel[j].normalized;
 	instr->format_comp_all = desc->channel[j].type == UTIL_FORMAT_TYPE_SIGNED;
-	instr->stride = vb->stride ? : 1;
+	instr->stride = vb->stride;
 	instr->offset = elem->src_offset;
 
 	unsigned swiz = 0;
