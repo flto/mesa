@@ -154,7 +154,7 @@ draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
 			vismode, info, index_offset);
 
 	/* necessary workaround.. gpu might hang without it */
-	if (is_a20x(ctx->screen) && vismode == USE_VISIBILITY)
+	if (is_a20x(ctx->screen)) // && vismode == USE_VISIBILITY)
 		OUT_WFI(ring);
 
 	emit_cacheflush(ring);
