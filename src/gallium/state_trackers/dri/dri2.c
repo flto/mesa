@@ -388,12 +388,26 @@ dri2_invalidate_drawable(__DRIdrawable *dPriv)
    p_atomic_inc(&drawable->base.stamp);
 }
 
+static void
+dri_set_damage(__DRIcontext *cPriv, __DRIdrawable *dPriv, int *rects, int n_rects)
+{
+	struct dri_context *ctx = dri_context(cPriv);
+	struct dri_drawable *drawable = dri_drawable(dPriv);
+	struct pipe_context *pipe = ctx->st->pipe;
+
+    if (!pipe->set_damage)
+        return;
+
+    pipe->set_damage(pipe, drawable->textures[ST_ATTACHMENT_BACK_LEFT], rects, n_rects);
+}
+
 static const __DRI2flushExtension dri2FlushExtension = {
     .base = { __DRI2_FLUSH, 4 },
 
     .flush                = dri2_flush_drawable,
     .invalidate           = dri2_invalidate_drawable,
     .flush_with_flags     = dri_flush,
+    .set_damage           = dri_set_damage,
 };
 
 /**

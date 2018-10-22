@@ -455,6 +455,22 @@ dri2_drm_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
    return EGL_TRUE;
 }
 
+static inline EGLBoolean
+dri2_drm_set_damage_region(_EGLDriver *drv, _EGLDisplay *disp,
+                                _EGLSurface *draw,
+                                const EGLint *rects, EGLint n_rects)
+{
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(_eglGetCurrentContext());
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
+
+   if (!dri2_dpy->flush)
+       return EGL_TRUE;
+
+   dri2_dpy->flush->set_damage(dri2_ctx->dri_context, dri2_surf->dri_drawable, rects, n_rects);
+   return EGL_TRUE;
+}
+
 static EGLint
 dri2_drm_query_buffer_age(_EGLDriver *drv,
                           _EGLDisplay *disp, _EGLSurface *surface)
@@ -682,7 +698,7 @@ static const struct dri2_egl_display_vtbl dri2_drm_display_vtbl = {
    .swap_buffers = dri2_drm_swap_buffers,
    .swap_buffers_with_damage = dri2_fallback_swap_buffers_with_damage,
    .swap_buffers_region = dri2_fallback_swap_buffers_region,
-   .set_damage_region = dri2_fallback_set_damage_region,
+   .set_damage_region = dri2_drm_set_damage_region,
    .post_sub_buffer = dri2_fallback_post_sub_buffer,
    .copy_buffers = dri2_fallback_copy_buffers,
    .query_buffer_age = dri2_drm_query_buffer_age,
@@ -781,8 +797,10 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
    }
 
    disp->Extensions.KHR_image_pixmap = EGL_TRUE;
-   if (dri2_dpy->dri2)
+   if (dri2_dpy->dri2) {
       disp->Extensions.EXT_buffer_age = EGL_TRUE;
+      disp->Extensions.KHR_partial_update = EGL_TRUE;
+	}
 
 #ifdef HAVE_WAYLAND_PLATFORM
    dri2_dpy->device_name = loader_get_device_name_for_fd(dri2_dpy->fd);

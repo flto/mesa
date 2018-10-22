@@ -1029,6 +1029,22 @@ dri2_wl_swap_buffers_with_damage(_EGLDriver *drv,
    return EGL_TRUE;
 }
 
+static inline EGLBoolean
+dri2_wl_set_damage_region(_EGLDriver *drv, _EGLDisplay *disp,
+                                _EGLSurface *draw,
+                                const EGLint *rects, EGLint n_rects)
+{
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(_eglGetCurrentContext());
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
+
+   if (!dri2_dpy->flush)
+       return EGL_TRUE;
+
+   dri2_dpy->flush->set_damage(dri2_ctx->dri_context, dri2_surf->dri_drawable, rects, n_rects);
+   return EGL_TRUE;
+}
+
 static EGLint
 dri2_wl_query_buffer_age(_EGLDriver *drv,
                          _EGLDisplay *disp, _EGLSurface *surface)
@@ -1268,7 +1284,7 @@ static const struct dri2_egl_display_vtbl dri2_wl_display_vtbl = {
    .swap_buffers = dri2_wl_swap_buffers,
    .swap_buffers_with_damage = dri2_wl_swap_buffers_with_damage,
    .swap_buffers_region = dri2_fallback_swap_buffers_region,
-   .set_damage_region = dri2_fallback_set_damage_region,
+   .set_damage_region = dri2_wl_set_damage_region,
    .post_sub_buffer = dri2_fallback_post_sub_buffer,
    .copy_buffers = dri2_fallback_copy_buffers,
    .query_buffer_age = dri2_wl_query_buffer_age,
