@@ -318,6 +318,9 @@ struct __DRI2flushExtensionRec {
                              __DRIdrawable *drawable,
                              unsigned flags,
                              enum __DRI2throttleReason throttle_reason);
+
+	void (*set_damage)(__DRIcontext *ctx,
+			__DRIdrawable *drawable, int *rects, int n_rects);
 };
 
 

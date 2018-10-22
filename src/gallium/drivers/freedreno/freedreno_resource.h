@@ -109,6 +109,11 @@ struct fd_resource {
 	uint16_t lrz_height;
 	uint16_t lrz_pitch;
 	struct fd_bo *lrz;
+
+	struct {
+		bool has_damage;
+		unsigned minx, miny, maxx, maxy;
+	} damage;
 };
 
 static inline struct fd_resource *

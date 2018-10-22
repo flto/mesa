@@ -123,6 +123,7 @@ calculate_tiles(struct fd_batch *batch)
 	uint32_t tpp_x, tpp_y;
 	bool has_zs = !!pfb->zsbuf;
 	int tile_n[npipes];
+	struct fd_resource *rsc_fb = pfb->nr_cbufs ? fd_resource(pfb->cbufs[0]->texture) : 0;
 
 	if (has_zs) {
 		struct fd_resource *rsc = fd_resource(pfb->zsbuf->texture);
@@ -139,9 +140,13 @@ calculate_tiles(struct fd_batch *batch)
 		cbuf_cpp[i] *= pfb->samples;
 	}
 
+	if (!pfb->nr_cbufs)
+		return;
+
 	if (!memcmp(gmem->zsbuf_cpp, zsbuf_cpp, sizeof(zsbuf_cpp)) &&
 		!memcmp(gmem->cbuf_cpp, cbuf_cpp, sizeof(cbuf_cpp)) &&
-		!memcmp(&gmem->scissor, scissor, sizeof(gmem->scissor))) {
+		!memcmp(&gmem->scissor, scissor, sizeof(gmem->scissor)) &&
+		!rsc_fb->damage.has_damage) {
 		/* everything is up-to-date */
 		return;
 	}
@@ -157,6 +162,14 @@ calculate_tiles(struct fd_batch *batch)
 		miny = scissor->miny & ~(gmem_alignh - 1);
 		width = scissor->maxx - minx;
 		height = scissor->maxy - miny;
+	}
+
+
+	if (rsc_fb->damage.has_damage) {
+		minx = rsc_fb->damage.minx & ~3;
+		miny = rsc_fb->damage.miny;
+		width = MIN2(rsc_fb->damage.maxx - minx, pfb->width);
+		height = MIN2(rsc_fb->damage.maxy - miny, pfb->height);
 	}
 
 	bin_w = align(width, gmem_alignw);

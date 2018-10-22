@@ -803,6 +803,10 @@ struct pipe_context {
    void (*invalidate_resource)(struct pipe_context *ctx,
                                struct pipe_resource *resource);
 
+   void (*set_damage)(struct pipe_context *ctx,
+					  struct pipe_resource *resource,
+					  int *rects, int n_rects);
+
    /**
     * Return information about unexpected device resets.
     */

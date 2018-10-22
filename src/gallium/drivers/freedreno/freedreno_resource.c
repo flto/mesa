@@ -1185,6 +1185,31 @@ fd_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 	rsc->valid = false;
 }
 
+static void
+fd_set_damage(struct pipe_context *pctx, struct pipe_resource *prsc, int *rects, int n_rects)
+{
+	assert(n_rects >= 1);
+	struct fd_resource *rsc = fd_resource(prsc);
+
+	int tl_x, tl_y, br_x, br_y;
+	tl_x = rects[0];
+	tl_y = rects[1];
+	br_x = rects[0] + rects[2];
+	br_y = rects[1] + rects[3];
+	for (int i = 4; i < n_rects * 4; i += 4) {
+		tl_x = MIN2(tl_x, rects[i + 0]);
+		tl_y = MIN2(tl_y, rects[i + 1]);
+		br_x = MAX2(br_x, rects[i + 0] + rects[i + 2]);
+		br_y = MAX2(br_y, rects[i + 1] + rects[i + 3]);
+	}
+
+	rsc->damage.has_damage = true;
+	rsc->damage.minx = tl_x;
+	rsc->damage.miny = tl_y;
+	rsc->damage.maxx = br_x;
+	rsc->damage.maxy = br_y;
+}
+
 static enum pipe_format
 fd_resource_get_internal_format(struct pipe_resource *prsc)
 {
@@ -1250,4 +1275,5 @@ fd_resource_context_init(struct pipe_context *pctx)
 	pctx->blit = fd_blit;
 	pctx->flush_resource = fd_flush_resource;
 	pctx->invalidate_resource = fd_invalidate_resource;
+	pctx->set_damage = fd_set_damage;
 }

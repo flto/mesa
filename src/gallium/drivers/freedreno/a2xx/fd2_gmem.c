@@ -430,8 +430,8 @@ fd2_emit_tile_init(struct fd_batch *batch)
 
 			mul_x = 1.0f / (float) (gmem->bin_w * 8);
 			mul_y = 1.0f / (float) (gmem->bin_h * 8);
-			off_x = -pipe->x * (1.0/8.0f) + 0.125f;
-			off_y = -pipe->y * (1.0/8.0f) + 0.125f;
+			off_x = -pipe->x * (1.0/8.0f) + 0.125f - mul_x * gmem->minx;
+			off_y = -pipe->y * (1.0/8.0f) + 0.125f - mul_y * gmem->miny;
 
 			OUT_RING(ring, fui(off_x * (256.0f/255.0f)));
 			OUT_RING(ring, fui(off_y * (256.0f/255.0f)));
