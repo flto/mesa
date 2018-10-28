@@ -698,6 +698,12 @@ setup_slices(struct fd_resource *rsc, uint32_t alignment, enum pipe_format forma
 	 */
 	uint32_t layers_in_level = rsc->layer_first ? 1 : prsc->array_size;
 
+	/* for a2xx:
+	 * something about each row being 256 byte aligned? tbc
+	 * 32*32 alignment of blocks?
+	 * for RGBA it doesn't make a difference at the moment...
+	 */
+
 	for (level = 0; level <= prsc->last_level; level++) {
 		struct fd_resource_slice *slice = fd_resource_slice(rsc, level);
 		uint32_t blocks;
@@ -765,7 +771,10 @@ fd_setup_slices(struct fd_resource *rsc)
 	alignment = slice_alignment(rsc->base.target);
 
 	struct fd_screen *screen = fd_screen(rsc->base.screen);
-	if (is_a4xx(screen)) {
+	if (is_a2xx(screen)) {
+		/* RB_COPY_DEST_BASE alignment */
+		alignment = 4096;
+	} else if (is_a4xx(screen)) {
 		switch (rsc->base.target) {
 		case PIPE_TEXTURE_3D:
 			rsc->layer_first = false;

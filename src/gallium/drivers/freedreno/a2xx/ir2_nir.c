@@ -528,14 +528,45 @@ static void emit_tex(struct ir2_context *ctx, nir_tex_instr * tex)
 		return;
 	}
 
-	// XXX anything special for cube textures?
+	struct ir2_src src_coord = make_src(ctx, coord);
+	if (is_cube) {
+#define IR2_SWIZZLE_ZZXY ((2 << 0) | (1 << 2) | (2 << 4) | (2 << 6))
+#define IR2_SWIZZLE_YXZZ ((1 << 0) | (3 << 2) | (0 << 4) | (3 << 6))
+#define IR2_SWIZZLE_XYW ((0 << 0) | (0 << 2) | (1 << 4) | (0 << 6))
+
+		instr = ir2_instr_create(ctx, IR2_ALU);
+		instr->alu.vector_opc = CUBEv;
+		instr->alu.scalar_opc = -1;
+		instr->alu.export = -1;
+		instr->alu.write_mask = 15;
+		instr->src_reg_count = 2;
+		instr->num_components = 4;
+
+		instr->src_reg[0] = src_coord;
+		instr->src_reg[0].swizzle = IR2_SWIZZLE_ZZXY;
+		instr->src_reg[1] = src_coord;
+		instr->src_reg[1].swizzle = IR2_SWIZZLE_YXZZ;
+
+		src_coord = ir2_src(instr->idx, 0, 0);
+
+		instr = instr_create_alu(ctx, nir_op_ffma, 4);
+		instr->src_reg[0] = src_coord;
+		//XXX multiply by 0.5 shouldn't be needed ??
+		float val0[4] = {0.5f, 0.5f, 1.0f, 1.0f};
+		instr->src_reg[1] = load_const(ctx, (uint32_t*) val0, 4);
+		float val[4] = {1.5f, 1.5f, 0.0f, 0.0f};
+		instr->src_reg[2] = load_const(ctx, (uint32_t*) val, 4);
+
+		src_coord = ir2_src(instr->idx, 0, 0);
+	}
+
 	// XXX use lod/bias
 	// what values go into: use_reg_lod, use_comp_lod (computed), lod_bias?
 	assert(tex->texture_index == tex->sampler_index);	// whats the difference?
 
 	instr = ir2_instr_create_fetch(ctx, &tex->dest, 1);
-	instr->src_reg[0] = ir2_src(get_index(ctx, coord),
-								!is_cube ? IR2_SWIZZLE_XYXY : 0, 0);
+	instr->src_reg[0] = src_coord;
+	instr->src_reg[0].swizzle = !is_cube ? IR2_SWIZZLE_XYXY : IR2_SWIZZLE_XYW;
 	instr->fetch.is_cube = is_cube;
 	instr->fetch.is_rect = is_rect;
 	instr->fetch.samp_id = tex->sampler_index;
