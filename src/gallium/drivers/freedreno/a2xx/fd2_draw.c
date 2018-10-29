@@ -175,7 +175,7 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
 	fd2_emit_state(ctx, ctx->batch->binning, ctx->dirty);
 
 	/* a20x can only draw 65535 vertices at once... */
-	if (is_a20x(ctx->screen) && pinfo->count > 0xffff) {
+	if (is_a20x(ctx->screen) && pinfo->count > 32766) {
 		struct pipe_draw_info info = *pinfo;
 		unsigned count = info.count;
 		unsigned num_vertices = ctx->batch->num_vertices;
@@ -187,13 +187,13 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
 			return false;
 
 		for (; count; ) {
-			info.count = MIN2(count, 0xffff);
+			info.count = MIN2(count, 32766);
 
 			draw_impl(ctx, &info, ctx->batch->draw, index_offset, false);
 			draw_impl(ctx, &info, ctx->batch->binning, index_offset, true);
 
-			info.start += 0xffff;
-			ctx->batch->num_vertices += 0xffff;
+			info.start += 32766;
+			ctx->batch->num_vertices += 32766;
 			count -= info.count;
 		}
 		/* changing this value is a hack, restore it */
