@@ -694,8 +694,12 @@ static void vertex_shader_epilog(struct ir2_context *ctx)
 	struct fd2_shader_stateobj *fp = ctx->so->v.fp;
 	struct ir2_instruction *instr, *rcp, *sc, *wc, *off;
 
+	instr = instr_create_alu(ctx, nir_op_fmax, 1);
+	instr->src_reg[0] = ir2_src(ctx->position, IR2_SWIZZLE_WWWW, 0);
+	instr->src_reg[1] = ir2_zero();
+
 	rcp = instr_create_alu(ctx, nir_op_frcp, 1);
-	rcp->src_reg[0] = ir2_src(ctx->position, IR2_SWIZZLE_WWWW, 0);
+	rcp->src_reg[0] = ir2_src(instr->idx, 0, 0);
 
 	sc = instr_create_alu(ctx, nir_op_fmul, 4);
 	sc->src_reg[0] = ir2_src(ctx->position, 0, 0);
