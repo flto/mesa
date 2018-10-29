@@ -429,10 +429,9 @@ emit_intrinsic(struct ir2_context *ctx, nir_intrinsic_instr * intr)
 			}
 		} else {
 			if (slot == FRAG_RESULT_COLOR || slot == FRAG_RESULT_DATA0) {
-				slot = 0;
+				idx = 0;
 			} else {
-				slot = ~0u;
-				assert(0);
+				idx = ~0u;
 			}
 		}
 
@@ -474,6 +473,46 @@ emit_intrinsic(struct ir2_context *ctx, nir_intrinsic_instr * intr)
 		compile_error(ctx, "unimplemented intr %d\n", intr->intrinsic);
 		break;
 	}
+}
+
+static struct ir2_src
+load_const(struct ir2_context *ctx, uint32_t *value, unsigned ncomp)
+{
+	struct fd2_shader_stateobj *so = ctx->so;
+	unsigned imm_ncomp, swiz, idx, i, j;
+
+	/* try to merge with existing immediate */
+	for (idx = 0; idx < so->num_immediates; idx++) {
+		swiz = 0;
+		imm_ncomp = so->immediates[idx].ncomp;
+		for (i = 0; i < ncomp; i++) {
+			for (j = 0; j < imm_ncomp; j++) {
+				if (value[i] == so->immediates[idx].val[j])
+					break;
+			}
+			if (j == imm_ncomp) {
+				if (j == 4)
+					break;
+				so->immediates[idx].val[imm_ncomp++] = value[i];
+			}
+			swiz |= swiz_set(j, i);
+		}
+		/* matched all components */
+		if (i == ncomp)
+			break;
+	}
+
+	/* need to allocate new immediate */
+	if (idx == so->num_immediates) {
+		for (i = 0; i < ncomp; i++)
+			ctx->so->immediates[idx].val[i] = value[i];
+		so->num_immediates++;
+		swiz = 0;
+		imm_ncomp = ncomp;
+	}
+	so->immediates[idx].ncomp = imm_ncomp;
+
+	return ir2_src(so->first_immediate + idx, swiz, IR2_REG_CONST);
 }
 
 static void emit_tex(struct ir2_context *ctx, nir_tex_instr * tex)
@@ -528,7 +567,7 @@ static void emit_tex(struct ir2_context *ctx, nir_tex_instr * tex)
 		return;
 	}
 
-	struct ir2_src src_coord = make_src(ctx, coord);
+	struct ir2_src src_coord = ir2_src(get_index(ctx, coord), 0, 0);
 	if (is_cube) {
 #define IR2_SWIZZLE_ZZXY ((2 << 0) | (1 << 2) | (2 << 4) | (2 << 6))
 #define IR2_SWIZZLE_YXZZ ((1 << 0) | (3 << 2) | (0 << 4) | (3 << 6))
@@ -605,52 +644,25 @@ static void setup_input(struct ir2_context *ctx, nir_variable * in)
 static void
 emit_load_const(struct ir2_context *ctx, nir_load_const_instr * instr)
 {
-	struct fd2_shader_stateobj *so = ctx->so;
-	unsigned ncomp = instr->def.num_components;
-	unsigned imm_ncomp, swiz, idx, i, j;
+	unsigned ncomp = instr->def.num_components, i;
+	uint32_t value[4];
 
-	/* XXX hack - translate NIR_TRUE to 1.0f */
-	for (i = 0; i < ncomp; i++)
+	/* XXX hacks - translate NIR_TRUE to 1.0f,
+	 * and values that look like integers to float
+	 */
+	for (i = 0; i < ncomp; i++) {
+		value[i] = instr->value.u32[i];
 		if (instr->value.u32[i] == NIR_TRUE)
-			instr->value.u32[i] = fui(1.0f);
-
-	/* try to merge with existing immediate */
-	for (idx = 0; idx < so->num_immediates; idx++) {
-		swiz = 0;
-		imm_ncomp = so->immediates[idx].ncomp;
-		for (i = 0; i < ncomp; i++) {
-			for (j = 0; j < imm_ncomp; j++) {
-				if (instr->value.u32[i] == so->immediates[idx].val[j])
-					break;
-			}
-			if (j == imm_ncomp) {
-				if (j == 4)
-					break;
-				so->immediates[idx].val[imm_ncomp++] = instr->value.u32[i];
-			}
-			swiz |= swiz_set(j, i);
-		}
-		/* matched all components */
-		if (i == ncomp)
-			break;
+			value[i] = fui(1.0f);
+		else if (instr->value.i32[i] >= -4096 && instr->value.i32[i] < 4096)
+			value[i] = fui((float) instr->value.i32[i]);
 	}
-
-	/* need to allocate new immediate */
-	if (idx == so->num_immediates) {
-		for (i = 0; i < ncomp; i++)
-			ctx->so->immediates[idx].val[i] = instr->value.u32[i];
-		so->num_immediates++;
-		swiz = 0;
-		imm_ncomp = ncomp;
-	}
-	so->immediates[idx].ncomp = imm_ncomp;
 
 	/* mov instruction to load const */
 	struct ir2_instruction *mov;
-	mov = instr_create_alu_dest(ctx, nir_op_fmov, &(nir_dest) {
-								.ssa = instr->def,.is_ssa = true});
-	mov->src_reg[0] =
-		ir2_src(so->first_immediate + idx, swiz, IR2_REG_CONST);
+	mov = instr_create_alu_dest(ctx, nir_op_fmov,
+		&(nir_dest) {.ssa = instr->def,.is_ssa = true});
+	mov->src_reg[0] = load_const(ctx, value, ncomp);
 }
 
 static void emit_instr(struct ir2_context *ctx, nir_instr * instr)

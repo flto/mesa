@@ -765,7 +765,7 @@ static inline uint32_t A2XX_RB_COLOR_INFO_SWAP(uint32_t val)
 static inline uint32_t A2XX_RB_COLOR_INFO_BASE(uint32_t val)
 {
 	assert(!(val & 0x3ff));
-	return ((val >> 10) << A2XX_RB_COLOR_INFO_BASE__SHIFT) & A2XX_RB_COLOR_INFO_BASE__MASK;
+	return ((val >> 12) << A2XX_RB_COLOR_INFO_BASE__SHIFT) & A2XX_RB_COLOR_INFO_BASE__MASK;
 }
 
 #define REG_A2XX_RB_DEPTH_INFO					0x00002002
