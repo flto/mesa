@@ -212,7 +212,7 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 			tex->src_swiz = fetch_swizzle(ctx, src_reg, 3);
 			tex->dst_reg = dst_to_reg(ctx, instr);
 			tex->dst_swiz = fetch_dst_swiz(ctx, instr);
-			tex->const_idx = instr->fetch.const_idx;
+			/* tex->const_idx = patch_fetches */
 			tex->mag_filter = TEX_FILTER_USE_FETCH_CONST;
 			tex->min_filter = TEX_FILTER_USE_FETCH_CONST;
 			tex->mip_filter = TEX_FILTER_USE_FETCH_CONST;
@@ -221,7 +221,7 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 			tex->vol_mag_filter = TEX_FILTER_USE_FETCH_CONST;
 			tex->vol_min_filter = TEX_FILTER_USE_FETCH_CONST;
 			tex->use_comp_lod = 1;
-			tex->use_reg_lod = !instr->fetch.is_cube;
+			tex->use_reg_lod = 0; /* last component of input is LOD? */
 			tex->sample_location = SAMPLE_CENTER;
 			tex->tx_coord_denorm = instr->fetch.is_rect;
 		} else {
@@ -376,6 +376,7 @@ void assemble(struct ir2_context *ctx)
 				}
 			} else {
 				info->tex.samp_id = instr->fetch.samp_id;
+				info->tex.src_swiz = fetch->tex.src_swiz;
 			}
 		}
 

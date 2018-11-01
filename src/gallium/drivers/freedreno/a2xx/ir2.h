@@ -41,6 +41,7 @@ struct ir2_fetch_info {
 		/* sampler id to patch const_idx */
 		struct {
 			uint16_t samp_id;
+			uint8_t src_swiz;
 		} tex;
 	};
 };

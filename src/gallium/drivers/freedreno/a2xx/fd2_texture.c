@@ -79,6 +79,7 @@ mip_filter(unsigned filter)
 {
 	switch (filter) {
 	case PIPE_TEX_MIPFILTER_NONE:
+		return SQ_TEX_FILTER_BASEMAP;
 	case PIPE_TEX_MIPFILTER_NEAREST:
 		return SQ_TEX_FILTER_POINT;
 	case PIPE_TEX_MIPFILTER_LINEAR:
@@ -190,6 +191,7 @@ fd2_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 		A2XX_SQ_TEX_2_WIDTH(prsc->width0 - 1);
 	so->tex3 = fd2_tex_swiz(cso->format, cso->swizzle_r, cso->swizzle_g,
 			cso->swizzle_b, cso->swizzle_a);
+
 	so->tex4 =
 		A2XX_SQ_TEX_4_MIP_MIN_LEVEL(fd_sampler_first_level(cso)) |
 		A2XX_SQ_TEX_4_MIP_MAX_LEVEL(fd_sampler_last_level(cso));
@@ -236,6 +238,13 @@ fd2_get_const_idx(struct fd_context *ctx, struct fd_texture_stateobj *tex,
 	if (tex == &ctx->tex[PIPE_SHADER_FRAGMENT])
 		return samp_id;
 	return samp_id + ctx->tex[PIPE_SHADER_FRAGMENT].num_samplers;
+}
+
+bool
+fd2_texture_swap_coords(struct fd_texture_stateobj *tex, unsigned samp_id)
+{
+	return tex->textures[samp_id]->format == PIPE_FORMAT_ETC1_RGB8 &&
+		tex->textures[samp_id]->texture->target == PIPE_TEXTURE_CUBE;
 }
 
 void

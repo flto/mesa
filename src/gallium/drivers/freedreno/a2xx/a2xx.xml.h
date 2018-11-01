@@ -8,7 +8,7 @@ http://github.com/freedreno/envytools/
 git clone https://github.com/freedreno/envytools.git
 
 The rules-ng-ng source files this header was generated from are:
-- rnndb//adreno/a2xx.xml         (  42331 bytes, from 2018-10-25 20:49:29)
+- rnndb/adreno/a2xx.xml          (  42463 bytes, from 2018-11-01 17:53:44)
 - rnndb/freedreno_copyright.xml  (   1572 bytes, from 2018-09-02 13:35:19)
 - rnndb/adreno/adreno_common.xml (  14201 bytes, from 2018-09-07 18:12:21)
 - rnndb/adreno/adreno_pm4.xml    (  42626 bytes, from 2018-09-17 18:20:14)
@@ -733,6 +733,18 @@ static inline uint32_t A2XX_RB_BC_CONTROL_MEM_EXPORT_TIMEOUT_SELECT(uint32_t val
 #define REG_A2XX_RB_DEBUG_DATA					0x00000f27
 
 #define REG_A2XX_RB_SURFACE_INFO				0x00002000
+#define A2XX_RB_SURFACE_INFO_SURFACE_PITCH__MASK		0x00003fff
+#define A2XX_RB_SURFACE_INFO_SURFACE_PITCH__SHIFT		0
+static inline uint32_t A2XX_RB_SURFACE_INFO_SURFACE_PITCH(uint32_t val)
+{
+	return ((val) << A2XX_RB_SURFACE_INFO_SURFACE_PITCH__SHIFT) & A2XX_RB_SURFACE_INFO_SURFACE_PITCH__MASK;
+}
+#define A2XX_RB_SURFACE_INFO_MSAA_SAMPLES__MASK			0x0000c000
+#define A2XX_RB_SURFACE_INFO_MSAA_SAMPLES__SHIFT		14
+static inline uint32_t A2XX_RB_SURFACE_INFO_MSAA_SAMPLES(uint32_t val)
+{
+	return ((val) << A2XX_RB_SURFACE_INFO_MSAA_SAMPLES__SHIFT) & A2XX_RB_SURFACE_INFO_MSAA_SAMPLES__MASK;
+}
 
 #define REG_A2XX_RB_COLOR_INFO					0x00002001
 #define A2XX_RB_COLOR_INFO_FORMAT__MASK				0x0000000f
@@ -764,7 +776,7 @@ static inline uint32_t A2XX_RB_COLOR_INFO_SWAP(uint32_t val)
 #define A2XX_RB_COLOR_INFO_BASE__SHIFT				12
 static inline uint32_t A2XX_RB_COLOR_INFO_BASE(uint32_t val)
 {
-	assert(!(val & 0x3ff));
+	assert(!(val & 0xfff));
 	return ((val >> 12) << A2XX_RB_COLOR_INFO_BASE__SHIFT) & A2XX_RB_COLOR_INFO_BASE__MASK;
 }
 
@@ -1893,7 +1905,7 @@ static inline uint32_t A2XX_SQ_TEX_0_CLAMP_Z(enum sq_tex_clamp val)
 {
 	return ((val) << A2XX_SQ_TEX_0_CLAMP_Z__SHIFT) & A2XX_SQ_TEX_0_CLAMP_Z__MASK;
 }
-#define A2XX_SQ_TEX_0_PITCH__MASK				0xffc00000
+#define A2XX_SQ_TEX_0_PITCH__MASK				0x7fc00000
 #define A2XX_SQ_TEX_0_PITCH__SHIFT				22
 static inline uint32_t A2XX_SQ_TEX_0_PITCH(uint32_t val)
 {
