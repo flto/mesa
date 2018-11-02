@@ -86,6 +86,8 @@ static const struct debug_named_value debug_options[] = {
 		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
 		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
 		{"perfcntrs", FD_DBG_PERFC,  "Expose performance counters"},
+		{"tex1x1",    FD_DBG_TEX1,  "Use 1x1 textures for debugging"},
+		{"fragsolid", FD_DBG_FRAGS,  "Use solid color fragment shaders for debugging"},
 		DEBUG_NAMED_VALUE_END
 };
 

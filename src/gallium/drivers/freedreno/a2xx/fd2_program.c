@@ -228,6 +228,9 @@ fd2_program_validate(struct fd_context *ctx)
 	struct fd_program_stateobj *prog = &ctx->prog;
 	struct fd2_shader_stateobj *fp = prog->fp, *vp = prog->vp;
 
+	if ((fd_mesa_debug & FD_DBG_FRAGS) && vp != ctx->blit_prog[0].vp)
+		fp = ctx->solid_prog.fp;
+
 	/* recompile vertex shader when fragment shader changes */
 	if (vp->v.fp != fp) {
 		vp->v.fp = fp;
@@ -251,6 +254,10 @@ fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 
 	vp = prog->vp;
 	fp = prog->fp;
+
+	if ((fd_mesa_debug & FD_DBG_FRAGS) && vp != batch->ctx->blit_prog[0].vp)
+		fp = batch->ctx->solid_prog.fp;
+
 	assert(vp->v.fp == fp);
 
 	emit(batch, ring, vp);
