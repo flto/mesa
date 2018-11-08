@@ -150,6 +150,9 @@ draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
 	if (binning || !is_a20x(ctx->screen) || (fd_mesa_debug & FD_DBG_NOBIN))
 		vismode = IGNORE_VISIBILITY;
 
+	if (info->mode == PIPE_PRIM_POINTS)
+		vismode = IGNORE_VISIBILITY;
+
 	fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
 			vismode, info, index_offset);
 
