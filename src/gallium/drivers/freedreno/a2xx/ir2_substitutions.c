@@ -26,24 +26,20 @@
 
 #include "ir2_private.h"
 
-static bool is_single_mov(struct ir2_instruction *instr)
+static bool is_single_mov(struct ir2_instr *instr)
 {
-	return instr->instr_type == IR2_ALU && instr->alu.vector_opc == MAXv &&
-		instr->src_reg_count == 1 && instr->reg_idx < 0;
+	return instr->type == IR2_ALU && instr->alu.vector_opc == MAXv &&
+		instr->src_count == 1;
 }
 
-static unsigned merge_flags(unsigned flags, unsigned flags_2)
+static void substitute(struct ir2_src *src, struct ir2_src b)
 {
-	assert(!(flags_2 & IR2_REG_CONST));
-	assert(!(flags_2 & IR2_REG_INPUT));
-	/* abs cancels previous negate */
-	if (flags_2 & IR2_REG_ABS)
-		flags &= ~IR2_REG_NEGATE, flags |= IR2_REG_ABS;
-	/* negate inverses previous negate */
-	if (flags_2 & IR2_REG_NEGATE)
-		flags ^= IR2_REG_NEGATE;
-
-	return flags;
+	src->num = b.num;
+	src->type = b.type;
+	src->swizzle = swiz_merge(b.swizzle, src->swizzle);
+	if (!src->abs) /* if we have abs we don't care about previous negate */
+        src->negate ^= b.negate;
+	src->abs |= b.abs;
 }
 
 /* substitutions: replace src regs when they refer to a mov instruction
@@ -55,28 +51,29 @@ static unsigned merge_flags(unsigned flags, unsigned flags_2)
  */
 void substitutions(struct ir2_context *ctx)
 {
-	struct ir2_instruction *p;
+	struct ir2_instr *p;
 
 	ir2_foreach_instr(instr, ctx) {
-		ir2_foreach_src_reg(reg, instr) {
+		ir2_foreach_src(src, instr) {
+			/* loop to substitute recursively */
 			do {
-				if (is_const(reg) || is_input(reg))
+                if (src->type != IR2_SRC_SSA)
 					break;
 
-				p = &ctx->instr[reg->num];
+				p = &ctx->instr[src->num];
+				/* don't work across blocks to avoid possible issues */
+				if (p->block_idx != instr->block_idx)
+					break;
+
 				if (!is_single_mov(p))
 					break;
 
-				/* cant apply abs to const reg
-				 * XXX verify if const neg works or not
-				 */
-				if ((is_abs(reg) || is_neg(reg)) && is_const(p->src_reg))
+				/* cant apply abs to const src, const src only for alu */
+				if (p->src[0].type == IR2_SRC_CONST &&
+					(src->abs || instr->type != IR2_ALU))
 					break;
 
-				reg->num = p->src_reg[0].num;
-				reg->swizzle =
-					swiz_merge(p->src_reg[0].swizzle, reg->swizzle);
-				reg->flags = merge_flags(p->src_reg[0].flags, reg->flags);
+				substitute(src, p->src[0]);
 			} while (1);
 		}
 	}
@@ -93,75 +90,137 @@ void substitutions(struct ir2_context *ctx)
  *	ALU:      MAXv    export0.___w = C9.???x, C9.???x
  *	ALU:      MAXv    export0.xyz_ = R0.xxx?, C8.xxx?
  *
- * TODO: also do it in non-export cases
  */
 void late_substitutions(struct ir2_context *ctx)
 {
-	struct ir2_instruction *p;
-	struct ir2_src *reg;
-
-	/* TODO there might be some cases where a partial redirect is possible */
+	struct ir2_instr *c[4], *ins[4];
+	struct ir2_src *src;
+	struct ir2_reg *reg;
+	unsigned ncomp;
 
 	ir2_foreach_instr(instr, ctx) {
-		if (!is_export(instr) || !is_single_mov(instr))
+		if (!is_export(instr)) /* TODO */
 			continue;
 
-		reg = &instr->src_reg[0];
-
-		if (is_const(reg) || is_input(reg))
+		if (!is_single_mov(instr))
 			continue;
+
+		src = &instr->src[0];
 
 		/* TODO add logic for this */
-		if (is_neg(reg) || is_abs(reg))
+		if (src->negate || src->abs)
 			continue;
 
-		p = &ctx->instr[reg->num];
-
-		/* FETCH can't write to export */
-		if (p->instr_type == IR2_FETCH)
+		if (src->type == IR2_SRC_INPUT || src->type == IR2_SRC_CONST)
 			continue;
+
+		reg = get_reg_src(ctx, src);
+		ncomp = dst_ncomp(instr);
+
+		unsigned reswiz[4] = {};
+		unsigned num_instr = 0;
+
+		/* fill array c with pointers to instrs that write each component */
+		if (src->type == IR2_SRC_SSA) {
+			struct ir2_instr *instr = &ctx->instr[src->num];
+
+			if (instr->type != IR2_ALU)
+				continue;
+
+			for (int i = 0; i < ncomp; i++)
+                c[i] = instr;
+
+			ins[num_instr++] = instr;
+			reswiz[0] = src->swizzle;
+		} else {
+			bool ok = true;
+			unsigned write_mask = 0;
+
+			ir2_foreach_instr(instr, ctx) {
+				if (instr->is_ssa || instr->reg != reg)
+					continue;
+
+				/* set by non-ALU */
+				if (instr->type != IR2_ALU) {
+					ok = false;
+					break;
+				}
+
+				/* component written more than once */
+				if (write_mask & instr->alu.write_mask) {
+					ok = false;
+					break;
+				}
+
+				write_mask |= instr->alu.write_mask;
+
+				/* src pointers for components */
+                for (int i = 0, j = 0; i < 4; i++) {
+					unsigned k = swiz_get(src->swizzle, i);
+					if (instr->alu.write_mask & 1 << k) {
+						c[i] = instr;
+
+						/* reswiz = compressed src->swizzle */
+						unsigned x = 0;
+						for (int i = 0; i < k; i++)
+							x += !!(instr->alu.write_mask & 1 << i);
+
+						assert(src->swizzle || x == j);
+						reswiz[num_instr] |= swiz_set(x, j++);
+					}
+				}
+				ins[num_instr++] = instr;
+			}
+			if (!ok)
+				continue;
+		}
 
 		bool redirect = true;
-		unsigned cnt[4] = { };
 
-		/* source components only used by this export */
-		for (int i = 0; i < instr->num_components; i++)
-			cnt[swiz_get(reg->swizzle, i)]++;
+		/* must all be in same block */
+		for (int i = 0; i < ncomp; i++)
+			redirect &= (c[i]->block_idx == instr->block_idx);
 
-		for (int i = 0; i < 4; i++)
-			redirect &= (p->components[i].ref_count == cnt[i]);
-
-		/* no FETCH instructions writing to the register */
-		ir2_foreach_instr(ins, ctx) {
-			if (ins != p && (ins->reg_idx != p->reg_idx || p->reg_idx < 0))
+		/* no other instr using the value */
+		ir2_foreach_instr(p, ctx) {
+			if (p == instr)
 				continue;
-			redirect &= ins->instr_type != IR2_FETCH;
+			ir2_foreach_src(src, p)
+				redirect &= reg != get_reg_src(ctx, src);
 		}
 
 		if (!redirect)
 			continue;
 
 		/* redirect the instructions writing to the register */
-		ir2_foreach_instr(ins, ctx) {
-			if (ins != p && (ins->reg_idx != p->reg_idx || p->reg_idx < 0))
+		for (int i = 0; i < num_instr; i++) {
+			struct ir2_instr *p = ins[i];
+
+			p->alu.export = instr->alu.export;
+			p->alu.write_mask = 0;
+			p->is_ssa = true;
+			p->ssa.ncomp = 0;
+			memset(p->ssa.comp, 0, sizeof(p->ssa.comp));
+
+			switch (instr->alu.vector_opc) {
+			case PRED_SETE_PUSHv ... PRED_SETGTE_PUSHv:
+			case DOT2ADDv:
+			case DOT3v:
+			case DOT4v:
+			case CUBEv:
 				continue;
-
-			struct ir2_reg_component *comp = get_components(ctx, ins);
-
-			unsigned swiz = 0;
-			for (int i = 0, k = 0; i < ins->num_components; k++) {
-				if (!(ins->alu.write_mask & 1 << k))
-					continue;
-				swiz |= swiz_set(i++, k);
-				comp[k].comp = k;
+			default:
+				break;
 			}
-			ins->alu.export = instr->alu.export;
+			ir2_foreach_src(s, p)
+				swiz_merge_p(&s->swizzle, reswiz[i]);
 		}
 
-		/* set ref_counts to zero and export instruction to emitted */
-		for (int i = 0; i < 4; i++)
-			p->components[i].ref_count = 0;
-
-		instr->emitted = true;
+		for (int i = 0; i < ncomp; i++) {
+			c[i]->alu.write_mask |= (1 << i);
+			c[i]->ssa.ncomp++;
+		}
+		instr->type = IR2_NONE;
+		instr->need_emit = false;
 	}
 }

@@ -34,110 +34,157 @@
 #include "fd2_program.h"
 #include "instr-a2xx.h"
 
-enum {
-	IR2_REG_INPUT = 0x1,
-	IR2_REG_CONST = 0x2,
-	IR2_REG_NEGATE = 0x4,
-	IR2_REG_ABS = 0x8,
+enum ir2_src_type {
+	IR2_SRC_SSA,
+	IR2_SRC_REG,
+	IR2_SRC_INPUT,
+	IR2_SRC_CONST,
 };
 
 struct ir2_src {
+	/* num can mean different things
+	 *   ssa: index of instruction
+	 *   reg: index in ctx->reg array
+	 *   input: index in ctx->input array
+	 *   const: constant index (C0, C1, etc)
+	 */
 	uint16_t num;
-	uint8_t swizzle, flags;
-};
-
-struct ir2_input_reg {
-	int8_t alloc;
-	uint8_t used_count;
+	uint8_t swizzle;
+	enum ir2_src_type type : 2;
+	uint8_t abs : 1;
+	uint8_t negate : 1;
+	uint8_t : 4;
 };
 
 struct ir2_reg_component {
-	int8_t comp;
-	uint8_t ref_count;
+	uint8_t c : 3; /* assigned x/y/z/w (7=dont write, for fetch instr) */
+	bool alloc : 1; /* is it currently allocated */
+	uint8_t ref_count; /* for ra */
 };
 
-struct ir2_alloc {
-	int8_t reg;
-	uint8_t mask;
+struct ir2_reg {
+	uint8_t idx; /* assigned hardware register */
+	uint8_t ncomp;
+
+	uint8_t loop_depth;
+	bool initialized;
+	/* block_idx to free on (-1 = free on ref_count==0) */
+	int block_idx_free;
+	struct ir2_reg_component comp[4];
 };
 
-struct ir2_instruction {
+struct ir2_instr {
 	unsigned idx;
+
+	unsigned block_idx;
+
 	enum {
 		IR2_NONE,
 		IR2_FETCH,
 		IR2_ALU,
-	} instr_type;
+		IR2_CF,
+	} type : 2;
 
-	struct ir2_src src_reg[4];
-	unsigned src_reg_count;
+	/* instruction needs to be emitted (for scheduling) */
+	bool need_emit : 1;
 
-	/* number of output components */
-	uint8_t num_components;
+	/* predicate value - (usually) same for entire block */
+	uint8_t pred : 2;
 
-	/* components for allocation */
-	struct ir2_reg_component components[4];
+	/* src */
+	uint8_t src_count;
+	struct ir2_src src[4];
 
-	/* reg idx for non-ssa */
-	int16_t reg_idx;
-
-	/* */
-	struct ir2_alloc alloc;
-	bool required, emitted;
-
+	/* dst */
+	bool is_ssa;
 	union {
-		/* FETCH specific: */
+		struct ir2_reg ssa;
 		struct {
-			instr_fetch_opc_t opc;
-			unsigned const_idx;
-			/* texture fetch specific: */
-			bool is_cube:1;
-			bool is_rect:1;
-			/* vertex fetch specific: */
-			unsigned const_idx_sel;
-			enum a2xx_sq_surfaceformat fmt;
-			bool is_signed:1;
-			bool is_normalized:1;
-			uint32_t stride;
-			uint32_t offset;
+			struct ir2_reg *reg;
 
-			unsigned idx;
-			unsigned samp_id;
+			/* cached ncomp of this instruction
+			 * based on writemask and reg->ncomp
+			 */
+			uint8_t reg_ncomp;
+		};
+	};
+
+	/* type-specific */
+	union {
+		struct {
+			instr_fetch_opc_t opc : 5;
+			union {
+				struct {
+					uint8_t const_idx;
+					uint8_t const_idx_sel;
+				} vtx;
+				struct {
+					bool is_cube : 1;
+					bool is_rect : 1;
+					uint8_t samp_id;
+				} tex;
+			};
 		} fetch;
 		struct {
-			int8_t scalar_opc, vector_opc;
+			/* store possible opcs, then we can choose vector/scalar instr */
+			instr_scalar_opc_t scalar_opc : 6;
+			instr_vector_opc_t vector_opc : 5;
+			/* same as nir */
+			uint8_t write_mask : 4;
+			bool saturate : 1;
+
+			/* export idx (-1 no export) */
 			int8_t export;
-			uint8_t write_mask;
-			bool saturate;
+
+			/* for scalarized 2 src instruction */
+			uint8_t src1_swizzle;
 		} alu;
+		struct {
+			/* jmp dst block_idx */
+			uint8_t block_idx;
+		} cf;
 	};
 };
 
 struct ir2_sched_instr {
 	uint32_t reg_state[8];
-	struct ir2_instruction *instr, *instr_s;
+	struct ir2_instr *instr, *instr_s;
 };
 
 struct ir2_context {
 	struct fd2_shader_stateobj *so;
 
+	unsigned block_idx, pred_idx;
+	uint8_t pred;
+	bool block_has_jump[64];
+
+	unsigned loop_last_block[64];
+	unsigned loop_depth;
+
+	nir_shader *nir;
+
 	/* ssa index of position output */
-	int position;
+	struct ir2_src position;
 
 	/* to translate SSA ids to instruction ids */
 	int16_t ssa_map[1024];
-	/* to translate reg ids (registers after vec lower) */
-	int16_t reg_map[128];
 
 	struct ir2_shader_info *info;
 
 	int prev_export;
 
-	uint32_t reg_state[8];
+	/* RA state */
+	struct ir2_reg* live_regs[64];
+	uint32_t reg_state[256/32]; /* 64*4 bits */
 
-	struct ir2_input_reg input[8];
+	/* inputs */
+	struct ir2_reg input[16 + 1]; /* 16 + param */
 
-	struct ir2_instruction instr[0x300];
+	/* non-ssa regs */
+	struct ir2_reg reg[64];
+	unsigned reg_count;
+
+	struct ir2_instr instr[0x300];
 	unsigned instr_count;
 
 	struct ir2_sched_instr instr_sched[0x180];
@@ -151,17 +198,32 @@ void assemble(struct ir2_context *ctx);
 
 bool ir2_nir_vectorize(nir_shader * shader);
 bool ir2_nir_lower_scalar(nir_shader * shader);
-void ir2_nir_compile(struct ir2_context *ctx);
+void ir2_nir_compile(struct ir2_context *ctx, unsigned variant);
+
+void ra_count_refs(struct ir2_context *ctx);
+void ra_reg(struct ir2_context *ctx, struct ir2_reg *reg, int force_idx,
+	bool export, uint8_t export_writemask);
+void ra_src_free(struct ir2_context *ctx, struct ir2_instr *instr);
+void ra_block_free(struct ir2_context *ctx, unsigned block);
 
 /* utils */
-
 enum {
+	IR2_SWIZZLE_Y = 1 << 0,
+	IR2_SWIZZLE_Z = 2 << 0,
+	IR2_SWIZZLE_W = 3 << 0,
+
+	IR2_SWIZZLE_ZW = 2 << 0 | 2 << 2,
+
+	IR2_SWIZZLE_XYW = 0 << 0 | 0 << 2 | 1 << 4,
+
 	IR2_SWIZZLE_XXXX = 0 << 0 | 3 << 2 | 2 << 4 | 1 << 6,
-	IR2_SWIZZLE_XYXY = 0 << 0 | 0 << 2 | 2 << 4 | 2 << 6,
 	IR2_SWIZZLE_YYYY = 1 << 0 | 0 << 2 | 3 << 4 | 2 << 6,
+	IR2_SWIZZLE_ZZZZ = 2 << 0 | 1 << 2 | 0 << 4 | 3 << 6,
 	IR2_SWIZZLE_WWWW = 3 << 0 | 2 << 2 | 1 << 4 | 0 << 6,
 	IR2_SWIZZLE_WYWW = 3 << 0 | 0 << 2 | 1 << 4 | 0 << 6,
-	IR2_SWIZZLE_XYZW = 0
+	IR2_SWIZZLE_XYXY = 0 << 0 | 0 << 2 | 2 << 4 | 2 << 6,
+	IR2_SWIZZLE_ZZXY = 2 << 0 | 1 << 2 | 2 << 4 | 2 << 6,
+	IR2_SWIZZLE_YXZZ = 1 << 0 | 3 << 2 | 0 << 4 | 3 << 6,
 };
 
 #define compile_error(ctx, args...) ({ \
@@ -170,29 +232,38 @@ enum {
 })
 
 static inline struct ir2_src
-ir2_src(uint16_t num, uint8_t swizzle, uint8_t flags)
+ir2_src(uint16_t num, uint8_t swizzle, enum ir2_src_type type)
 {
 	return (struct ir2_src) {
-	.num = num,.swizzle = swizzle,.flags = flags};
+		.num = num,
+		.swizzle = swizzle,
+		.type = type
+	};
 }
 
+/* XXX somewhat hacky.. */
 static inline struct ir2_src ir2_zero(void)
 {
-	return ir2_src(63, IR2_SWIZZLE_XXXX, IR2_REG_CONST);
+	return ir2_src(63, IR2_SWIZZLE_WWWW, IR2_SRC_CONST);
 }
 
 #define ir2_foreach_instr(it, ctx) \
-	for (struct ir2_instruction *it = (ctx)->instr; ({ \
-		while (it != &(ctx)->instr[(ctx)->instr_count] && it->instr_type == IR2_NONE) it++; \
+	for (struct ir2_instr *it = (ctx)->instr; ({ \
+		while (it != &(ctx)->instr[(ctx)->instr_count] && it->type == IR2_NONE) it++; \
 		 it != &(ctx)->instr[(ctx)->instr_count]; }); it++)
 
+#define ir2_foreach_live_reg(it, ctx) \
+	for (struct ir2_reg **__ptr = (ctx)->live_regs, *it; ({ \
+		while (__ptr != &(ctx)->live_regs[64] && *__ptr == NULL) __ptr++; \
+		 __ptr != &(ctx)->live_regs[64] ? (it=*__ptr) : NULL; }); it++)
+
 #define ir2_foreach_avail(it) \
-	for (struct ir2_instruction **__instrp = avail, *it; \
+	for (struct ir2_instr **__instrp = avail, *it; \
 		it = *__instrp,  __instrp != &avail[avail_count]; __instrp++)
 
-#define ir2_foreach_src_reg(it, instr) \
-	for (struct ir2_src *it = instr->src_reg; \
-		 it != &instr->src_reg[instr->src_reg_count]; it++)
+#define ir2_foreach_src(it, instr) \
+	for (struct ir2_src *it = instr->src; \
+		 it != &instr->src[instr->src_count]; it++)
 
 /* mask for register allocation
  * 64 registers with 4 components each = 256 bits
@@ -221,47 +292,15 @@ static inline unsigned mask_reg(uint32_t * mask, unsigned num)
 	return mask[num / 8] >> num % 8 * 4 & 0xf;
 }
 
-static inline bool is_input(struct ir2_src *reg)
+static inline bool is_export(struct ir2_instr *instr)
 {
-	return ! !(reg->flags & IR2_REG_INPUT);
+	return instr->type == IR2_ALU && instr->alu.export >= 0;
 }
 
-static inline bool is_const(struct ir2_src *reg)
-{
-	return ! !(reg->flags & IR2_REG_CONST);
-}
-
-static inline bool is_neg(struct ir2_src *reg)
-{
-	return ! !(reg->flags & IR2_REG_NEGATE);
-}
-
-static inline bool is_abs(struct ir2_src *reg)
-{
-	return ! !(reg->flags & IR2_REG_ABS);
-}
-
-static inline bool is_export(struct ir2_instruction *instr)
-{
-	return instr->instr_type == IR2_ALU && instr->alu.export >= 0;
-}
-
-static inline instr_alloc_type_t export_buffer(unsigned num)
+static inline instr_alloc_type_t export_buf(unsigned num)
 {
 	return num < 32 ? SQ_PARAMETER_PIXEL :
 		num >= 62 ? SQ_POSITION : SQ_MEMORY;
-}
-
-static inline unsigned export_order(unsigned num)
-{
-	switch (export_buffer(num)) {
-	default:
-		return 0;
-	case SQ_POSITION:
-		return 1;
-	case SQ_MEMORY:
-		return 2;
-	}
 }
 
 /* bitwisk to swizzle c in channel i */
@@ -284,48 +323,73 @@ static inline unsigned swiz_merge(unsigned swiz0, unsigned swiz1)
 	return swiz;
 }
 
-static inline
-	struct ir2_alloc *get_alloc(struct ir2_context *ctx,
-								struct ir2_instruction *p)
+static inline void swiz_merge_p(uint8_t *swiz0, unsigned swiz1)
 {
-	return p->reg_idx < 0 ? &p->alloc : &ctx->instr[p->reg_idx].alloc;
+	unsigned swiz = 0;
+	for (int i = 0; i < 4; i++)
+		swiz |= swiz_set(swiz_get(*swiz0, swiz_get(swiz1, i)), i);
+	*swiz0 = swiz;
 }
 
-static inline struct ir2_reg_component *get_components(struct ir2_context
-													   *ctx,
-													   struct
-													   ir2_instruction *p)
+static inline struct ir2_reg * get_reg(struct ir2_instr *instr)
 {
-	return p->reg_idx <
-		0 ? p->components : ctx->instr[p->reg_idx].components;
+	return instr->is_ssa ? &instr->ssa : instr->reg;
 }
 
-/* for instructions we have "num_components" for the dst regs
- * util to get a num_components value for the src registers
- */
-static inline unsigned num_src_comps(struct ir2_instruction *p)
+static inline struct ir2_reg *
+get_reg_src(struct ir2_context *ctx, struct ir2_src *src)
 {
-	if (p->instr_type == IR2_FETCH) {
-		switch (p->fetch.opc) {
+	switch (src->type) {
+	case IR2_SRC_INPUT:
+		return &ctx->input[src->num];
+	case IR2_SRC_SSA:
+		return &ctx->instr[src->num].ssa;
+	case IR2_SRC_REG:
+		return &ctx->reg[src->num];
+	default:
+		return NULL;
+	}
+}
+
+/* gets a ncomp value for the dst */
+static inline unsigned dst_ncomp(struct ir2_instr *instr)
+{
+	return instr->is_ssa ? instr->ssa.ncomp : instr->reg_ncomp;
+}
+
+/* gets a ncomp value for the src registers */
+static inline unsigned src_ncomp(struct ir2_instr *instr)
+{
+	if (instr->type == IR2_FETCH) {
+		switch (instr->fetch.opc) {
 		case VTX_FETCH:
 			return 1;
 		case TEX_FETCH:
-			return 3;
+			return instr->fetch.tex.is_cube ? 3 : 2;
+		case TEX_SET_TEX_LOD:
+			return 1;
 		default:
 			assert(0);
 		}
 	}
 
-	assert(p->instr_type == IR2_ALU);
+	switch (instr->alu.scalar_opc) {
+	case PRED_SETEs ... KILLONEs:
+		return 1;
+	default:
+		break;
+	}
 
-	switch (p->alu.vector_opc) {
+	switch (instr->alu.vector_opc) {
 	case DOT2ADDv:
 		return 2;
 	case DOT3v:
 		return 3;
 	case DOT4v:
+	case CUBEv:
+	case PRED_SETE_PUSHv:
 		return 4;
 	default:
-		return p->num_components;
+		return dst_ncomp(instr);
 	}
 }

@@ -36,36 +36,22 @@
 })
 
 static unsigned
-src_swizzle(struct ir2_context *ctx, struct ir2_src *reg, unsigned ncomp)
+src_swizzle(struct ir2_context *ctx, struct ir2_src *src, unsigned ncomp)
 {
 	struct ir2_reg_component *comps;
 
-	/* for const/input, nothing to do */
-	if (is_const(reg) || is_input(reg))
-		return reg->swizzle;
-
-	/* we need to take into account where the src components were allocated */
-	comps = get_components(ctx, &ctx->instr[reg->num]);
-	return swiz_transform(reg->swizzle, ncomp, comps[c].comp);
+	switch (src->type) {
+	case IR2_SRC_SSA:
+	case IR2_SRC_REG:
+		/* we need to take into account where the src components were allocated */
+		comps = get_reg_src(ctx, src)->comp;
+		return swiz_transform(src->swizzle, ncomp, comps[c].c);
+	default:
+		return src->swizzle;
+	}
 }
 
 /* alu instr need to take into how the output components are allocated */
-
-static unsigned
-alu_swizzle(struct ir2_context *ctx, struct ir2_instruction *instr,
-			struct ir2_src *reg)
-{
-	struct ir2_reg_component *comp = get_components(ctx, instr);
-	unsigned swiz0 = src_swizzle(ctx, reg, num_src_comps(instr));
-	unsigned swiz = 0;
-
-	for (int i = 0, j = 0; i < instr->num_components; j++) {
-		if (instr->alu.write_mask & 1 << j)
-			swiz |= swiz_set(i++, comp[j].comp);
-	}
-
-	return swiz_merge(swiz0, swiz);
-}
 
 /* scalar doesn't need to take into account dest swizzle */
 
@@ -77,26 +63,54 @@ alu_swizzle_scalar(struct ir2_context *ctx, struct ir2_src *reg)
 }
 
 static unsigned
-alu_swizzle_scalar2(struct ir2_context *ctx, struct ir2_src *reg)
+alu_swizzle(struct ir2_context *ctx, struct ir2_instr *instr, struct ir2_src *src)
+{
+	struct ir2_reg_component *comp = get_reg(instr)->comp;
+	unsigned swiz0 = src_swizzle(ctx, src, src_ncomp(instr));
+	unsigned swiz = 0;
+
+	/* non per component special cases */
+	switch (instr->alu.vector_opc) {
+	case PRED_SETE_PUSHv ... PRED_SETGTE_PUSHv:
+		return alu_swizzle_scalar(ctx, src);
+	case DOT2ADDv:
+	case DOT3v:
+	case DOT4v:
+	case CUBEv:
+		return swiz0;
+	default:
+		break;
+	}
+
+	for (int i = 0, j = 0; i < dst_ncomp(instr); j++) {
+		if (instr->alu.write_mask & 1 << j) {
+			if (comp[j].c != 7)
+				swiz |= swiz_set(i, comp[j].c);
+			i++;
+		}
+	}
+	return swiz_merge(swiz0, swiz);
+}
+
+static unsigned
+alu_swizzle_scalar2(struct ir2_context *ctx, struct ir2_src *src, unsigned s1)
 {
 	/* hardware seems to take from ZW, but swizzle everywhere (ABAB) */
-	unsigned s0 = swiz_get(src_swizzle(ctx, &reg[0], 1), 0);
-	unsigned s1 = swiz_get(src_swizzle(ctx, &reg[1], 1), 0);
-
+	unsigned s0 = swiz_get(src_swizzle(ctx, src, 1), 0);
 	return swiz_merge(swiz_set(s0, 0) | swiz_set(s1, 1), IR2_SWIZZLE_XYXY);
 }
 
 /* write_mask needs to be transformed by allocation information */
 
 static unsigned
-alu_write_mask(struct ir2_context *ctx, struct ir2_instruction *instr)
+alu_write_mask(struct ir2_context *ctx, struct ir2_instr *instr)
 {
-	struct ir2_reg_component *comp = get_components(ctx, instr);
+	struct ir2_reg_component *comp = get_reg(instr)->comp;
 	unsigned write_mask = 0;
 
 	for (int i = 0; i < 4; i++) {
 		if (instr->alu.write_mask & 1 << i)
-			write_mask |= 1 << comp[i].comp;
+			write_mask |= 1 << comp[i].c;
 	}
 
 	return write_mask;
@@ -105,9 +119,9 @@ alu_write_mask(struct ir2_context *ctx, struct ir2_instruction *instr)
 /* fetch instructions can swizzle dest, but src swizzle needs conversion */
 
 static unsigned
-fetch_swizzle(struct ir2_context *ctx, struct ir2_src *reg, unsigned ncomp)
+fetch_swizzle(struct ir2_context *ctx, struct ir2_src *src, unsigned ncomp)
 {
-	unsigned alu_swiz = src_swizzle(ctx, reg, ncomp);
+	unsigned alu_swiz = src_swizzle(ctx, src, ncomp);
 	unsigned swiz = 0;
 	for (int i = 0; i < ncomp; i++)
 		swiz |= swiz_get(alu_swiz, i) << i * 2;
@@ -115,51 +129,40 @@ fetch_swizzle(struct ir2_context *ctx, struct ir2_src *reg, unsigned ncomp)
 }
 
 static unsigned
-fetch_dst_swiz(struct ir2_context *ctx, struct ir2_instruction *instr)
+fetch_dst_swiz(struct ir2_context *ctx, struct ir2_instr *instr)
 {
-	struct ir2_reg_component *comp = get_components(ctx, instr);
+	struct ir2_reg_component *comp = get_reg(instr)->comp;
 	unsigned dst_swiz = 0xfff;
-	for (int i = 0; i < instr->num_components; i++) {
-		dst_swiz &= ~(7 << comp[i].comp * 3);
-		dst_swiz |= i << comp[i].comp * 3;
+	for (int i = 0; i < dst_ncomp(instr); i++) {
+		dst_swiz &= ~(7 << comp[i].c * 3);
+		dst_swiz |= i << comp[i].c * 3;
 	}
 	return dst_swiz;
 }
 
-
 /* register / export # for instr */
 static unsigned
-dst_to_reg(struct ir2_context *ctx, struct ir2_instruction *instr)
+dst_to_reg(struct ir2_context *ctx, struct ir2_instr *instr)
 {
 	if (is_export(instr))
 		return instr->alu.export;
 
-	return get_alloc(ctx, instr)->reg;
+	return get_reg(instr)->idx;
 }
 
 /* register # for src */
-static unsigned src_to_reg(struct ir2_context *ctx, struct ir2_src *reg)
+static unsigned src_to_reg(struct ir2_context *ctx, struct ir2_src *src)
 {
-	assert(!is_const(reg));
-
-	if (is_input(reg))
-		return reg->num;
-
-	return get_alloc(ctx, &ctx->instr[reg->num])->reg;
+	return get_reg_src(ctx, src)->idx;
 }
 
-static unsigned src_reg_byte(struct ir2_context *ctx, struct ir2_src *reg)
+static unsigned src_reg_byte(struct ir2_context *ctx, struct ir2_src *src)
 {
-	if (reg->flags & IR2_REG_CONST) {
-		// XXX allow negate?
-		assert((reg->flags & ~IR2_REG_NEGATE) == IR2_REG_CONST);
-		return reg->num;
+	if (src->type == IR2_SRC_CONST) {
+		assert(!src->abs); /* no abs bit for const */
+		return src->num;
 	}
-
-	unsigned num = src_to_reg(ctx, reg);
-	if (reg->flags & IR2_REG_ABS)
-		num |= 0x80;
-	return num;
+	return src_to_reg(ctx, src) | (src->abs ? 0x80 : 0);
 }
 
 /* produce the 12 byte binary instruction for a given sched_instr */
@@ -167,34 +170,35 @@ static void
 fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 		   instr_alu_t * alu, bool * is_fetch)
 {
-	struct ir2_instruction *instr = sched->instr, *instr_s, *instr_v;
+	struct ir2_instr *instr = sched->instr, *instr_s, *instr_v;
 
 	memset(alu, 0, sizeof(*alu));
 
-	if (instr && instr->instr_type == IR2_FETCH) {
+	if (instr && instr->type == IR2_FETCH) {
 		*is_fetch = true;
 
 		instr_fetch_t *fetch = (instr_fetch_t *) alu;
 
 		fetch->opc = instr->fetch.opc;
+		fetch->pred_select = !!instr->pred;
+		fetch->pred_condition = instr->pred & 1;
 
-		assert(instr->src_reg_count == 1);
-		struct ir2_src *src_reg = instr->src_reg;
+		struct ir2_src *src = instr->src;
 
 		if (instr->fetch.opc == VTX_FETCH) {
 			instr_fetch_vtx_t *vtx = &fetch->vtx;
 
-			assert(instr->fetch.stride <= 0xff);
-			assert(instr->fetch.fmt <= 0x3f);
-			assert(instr->fetch.const_idx <= 0x1f);
-			assert(instr->fetch.const_idx_sel <= 0x3);
+			assert(instr->fetch.vtx.const_idx <= 0x1f);
+			assert(instr->fetch.vtx.const_idx_sel <= 0x3);
 
-			vtx->src_reg = src_to_reg(ctx, src_reg);
-			vtx->src_swiz = fetch_swizzle(ctx, src_reg, 1);
+			vtx->src_reg = src_to_reg(ctx, src);
+			vtx->src_swiz = fetch_swizzle(ctx, src, 1);
 			vtx->dst_reg = dst_to_reg(ctx, instr);
+			vtx->dst_swiz = fetch_dst_swiz(ctx, instr);
+
 			vtx->must_be_one = 1;
-			vtx->const_index = instr->fetch.const_idx;
-			vtx->const_index_sel = instr->fetch.const_idx_sel;
+			vtx->const_index = instr->fetch.vtx.const_idx;
+			vtx->const_index_sel = instr->fetch.vtx.const_idx_sel;
 
 			/* other fields will be patched */
 
@@ -206,10 +210,8 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 		} else if (instr->fetch.opc == TEX_FETCH) {
 			instr_fetch_tex_t *tex = &fetch->tex;
 
-			assert(instr->fetch.const_idx <= 0x1f);
-
-			tex->src_reg = src_to_reg(ctx, src_reg);
-			tex->src_swiz = fetch_swizzle(ctx, src_reg, 3);
+			tex->src_reg = src_to_reg(ctx, src);
+			tex->src_swiz = fetch_swizzle(ctx, src, 3);
 			tex->dst_reg = dst_to_reg(ctx, instr);
 			tex->dst_swiz = fetch_dst_swiz(ctx, instr);
 			/* tex->const_idx = patch_fetches */
@@ -220,10 +222,28 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 			tex->arbitrary_filter = ARBITRARY_FILTER_USE_FETCH_CONST;
 			tex->vol_mag_filter = TEX_FILTER_USE_FETCH_CONST;
 			tex->vol_min_filter = TEX_FILTER_USE_FETCH_CONST;
-			tex->use_comp_lod = 1;
-			tex->use_reg_lod = 0; /* last component of input is LOD? */
+			tex->use_comp_lod = ctx->so->type == SHADER_FRAGMENT;
+			tex->use_reg_lod = instr->src_count == 2;
 			tex->sample_location = SAMPLE_CENTER;
-			tex->tx_coord_denorm = instr->fetch.is_rect;
+			tex->tx_coord_denorm = instr->fetch.tex.is_rect;
+		} else if (instr->fetch.opc == TEX_SET_TEX_LOD) {
+			instr_fetch_tex_t *tex = &fetch->tex;
+
+			tex->src_reg = src_to_reg(ctx, src);
+			tex->src_swiz = fetch_swizzle(ctx, src, 1);
+			tex->dst_reg = 0;
+			tex->dst_swiz = 0xfff;
+
+			tex->mag_filter = TEX_FILTER_USE_FETCH_CONST;
+			tex->min_filter = TEX_FILTER_USE_FETCH_CONST;
+			tex->mip_filter = TEX_FILTER_USE_FETCH_CONST;
+			tex->aniso_filter = ANISO_FILTER_USE_FETCH_CONST;
+			tex->arbitrary_filter = ARBITRARY_FILTER_USE_FETCH_CONST;
+			tex->vol_mag_filter = TEX_FILTER_USE_FETCH_CONST;
+			tex->vol_min_filter = TEX_FILTER_USE_FETCH_CONST;
+			tex->use_comp_lod = 1;
+			tex->use_reg_lod = 0;
+			tex->sample_location = SAMPLE_CENTER;
 		} else {
 			assert(0);
 		}
@@ -236,9 +256,9 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 	if (instr_v) {
 		struct ir2_src src1, src2, *src3;
 
-		src1 = instr_v->src_reg[0];
-		src2 = instr_v->src_reg[instr_v->src_reg_count > 1];
-		src3 = instr_v->src_reg_count == 3 ? &instr_v->src_reg[2] : NULL;
+		src1 = instr_v->src[0];
+		src2 = instr_v->src[instr_v->src_count > 1];
+		src3 = instr_v->src_count == 3 ? &instr_v->src[2] : NULL;
 
 		alu->vector_opc = instr_v->alu.vector_opc;
 		alu->vector_write_mask = alu_write_mask(ctx, instr_v);
@@ -247,7 +267,11 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 		alu->export_data = instr_v->alu.export >= 0;
 
 		/* single operand SETEv, use 0.0f as src2 */
-		if (instr_v->src_reg_count == 1 && alu->vector_opc == SETEv)
+		if (instr_v->src_count == 1 &&
+			(alu->vector_opc == SETEv ||
+			alu->vector_opc == SETNEv ||
+			alu->vector_opc == SETGTv ||
+			alu->vector_opc == SETGTEv))
 			src2 = ir2_zero();
 
 		/* export32 has this bit set.. it seems to do more than just set
@@ -258,24 +282,26 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 
 		alu->src1_reg_byte = src_reg_byte(ctx, &src1);
 		alu->src1_swiz = alu_swizzle(ctx, instr_v, &src1);
-		alu->src1_reg_negate = ! !(src1.flags & IR2_REG_NEGATE);
-		alu->src1_sel = !(src1.flags & IR2_REG_CONST);
+		alu->src1_reg_negate = src1.negate;
+		alu->src1_sel = src1.type != IR2_SRC_CONST;
 
 		alu->src2_reg_byte = src_reg_byte(ctx, &src2);
 		alu->src2_swiz = alu_swizzle(ctx, instr_v, &src2);
-		alu->src2_reg_negate = ! !(src2.flags & IR2_REG_NEGATE);
-		alu->src2_sel = !(src2.flags & IR2_REG_CONST);
+		alu->src2_reg_negate = src2.negate;
+		alu->src2_sel = src2.type != IR2_SRC_CONST;
 
 		if (src3) {
 			alu->src3_reg_byte = src_reg_byte(ctx, src3);
 			alu->src3_swiz = alu_swizzle(ctx, instr_v, src3);
-			alu->src3_reg_negate = ! !(src3->flags & IR2_REG_NEGATE);
-			alu->src3_sel = !(src3->flags & IR2_REG_CONST);
+			alu->src3_reg_negate = src3->negate;
+			alu->src3_sel = src3->type != IR2_SRC_CONST;
 		}
+
+		alu->pred_select = instr_v->pred;
 	}
 
 	if (instr_s) {
-		struct ir2_src *src = instr_s->src_reg;
+		struct ir2_src *src = instr_s->src;
 
 		alu->scalar_opc = instr_s->alu.scalar_opc;
 		alu->scalar_write_mask = alu_write_mask(ctx, instr_s);
@@ -283,19 +309,23 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 		alu->scalar_clamp = instr_s->alu.saturate;
 		alu->export_data = instr_s->alu.export >= 0;
 
-		if (instr_s->src_reg_count == 1) {
+		if (instr_s->src_count == 1) {
 			alu->src3_reg_byte = src_reg_byte(ctx, src);
 			alu->src3_swiz = alu_swizzle_scalar(ctx, src);
-			alu->src3_reg_negate = is_neg(src);
-			alu->src3_sel = !is_const(src);
+			alu->src3_reg_negate = src->negate;
+			alu->src3_sel = src->type != IR2_SRC_CONST;
 		} else {
-			assert(instr_s->src_reg_count == 2);
+			assert(instr_s->src_count == 2);
 
 			alu->src3_reg_byte = src_reg_byte(ctx, src);
-			alu->src3_swiz = alu_swizzle_scalar2(ctx, src);
-			alu->src3_reg_negate = is_neg(src);
-			alu->src3_sel = !is_const(src);
+			alu->src3_swiz = alu_swizzle_scalar2(ctx, src, instr_s->alu.src1_swizzle);
+			alu->src3_reg_negate = src->negate;
+			alu->src3_sel = src->type != IR2_SRC_CONST;;
 		}
+
+		if (instr_v)
+			assert(instr_s->pred == instr_v->pred);
+		alu->pred_select = instr_s->pred;
 	}
 
 	*is_fetch = false;
@@ -304,7 +334,7 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 
 static unsigned
 write_cfs(struct ir2_context *ctx, instr_cf_t * cfs, unsigned cf_idx,
-		  instr_cf_alloc_t * alloc, instr_cf_exec_t * exec)
+		  instr_cf_alloc_t *alloc, instr_cf_exec_t *exec)
 {
 	assert(exec->count);
 
@@ -331,86 +361,127 @@ void assemble(struct ir2_context *ctx)
 	 * address is 9 bits so could it be 512 ?
 	 */
 	instr_cf_t cfs[384];
-	instr_alu_t instr[384];
+	union {
+		instr_alu_t alu;
+		instr_fetch_t fetch;
+	} instr[384];
+	unsigned block_addr[128];
 	unsigned num_cf = 0;
 
 	/* CF instr state */
-	instr_cf_exec_t exec = {.opc = EXEC };
-	instr_cf_alloc_t alloc = {.opc = ALLOC };
+	instr_cf_exec_t exec = {.opc = EXEC};
+	instr_cf_alloc_t alloc = {.opc = ALLOC};
 
-	bool is_fetch;
-	bool prev_fetch = false;
+	int sync_id, sync_id_prev = -1;
+	bool is_fetch = false;
 	bool need_sync = true;
 	bool need_alloc = false;
+	unsigned block_idx = 0;
 
 	ctx->info->export32_offset = -1;
 	ctx->info->num_fetch_instrs = 0;
 
-	if (ctx->info->max_export == -1) {
+	if ((ctx->so->type == SHADER_VERTEX && ctx->so->f.inputs_count == 0) ||
+		ctx->info == &ctx->so->info[1]) { /* hack to check binning variant */
 		alloc.buffer_select = SQ_PARAMETER_PIXEL;
 		cfs[num_cf++].alloc = alloc;
 	}
 
-	for (int i = 0; i < ctx->instr_sched_count; i++) {
-		/* fill the 3 dwords for the instruction */
-		fill_instr(ctx, &ctx->instr_sched[i], &instr[i], &is_fetch);
+	block_addr[0] = 0;
 
-		need_sync = !i || is_fetch != prev_fetch;
-		prev_fetch = is_fetch;
+	for (int i = 0, j = 0; j < ctx->instr_sched_count; j++) {
+		if (ctx->instr_sched[j].instr &&
+			ctx->instr_sched[j].instr->type == IR2_CF) {
+
+		if (exec.count) {
+			num_cf = write_cfs(ctx, cfs, num_cf, need_alloc ? &alloc : NULL, &exec);
+			need_alloc = false;
+		}
+
+			struct ir2_instr *instr = ctx->instr_sched[j].instr;
+
+			instr_cf_jmp_call_t jmp = {.opc = COND_JMP};
+			jmp.address = instr->cf.block_idx; /* will be fixed later */
+            jmp.force_call = !instr->pred;
+            jmp.predicated_jmp = 1;
+            jmp.direction = instr->cf.block_idx > instr->block_idx;
+			jmp.condition = instr->pred & 1;
+			cfs[num_cf++].jmp_call = jmp;
+
+			//printf("jump blockid %u\n", jmp.address);
+			continue;
+		}
+
+		/* fill the 3 dwords for the instruction */
+		fill_instr(ctx, &ctx->instr_sched[j], &instr[i].alu, &is_fetch);
+
+		sync_id = 0;
+		if (is_fetch)
+			sync_id = instr[i].fetch.opc == VTX_FETCH ? 1 : 2;
+
+		need_sync = sync_id != sync_id_prev;
+		sync_id_prev = sync_id;
+
+		unsigned block;
+		{
+
+			if (ctx->instr_sched[j].instr)
+				block = ctx->instr_sched[j].instr->block_idx;
+			else
+				block = ctx->instr_sched[j].instr_s->block_idx;
+
+			assert(block_idx <= block);
+		}
 
 		/* info for patching */
 		if (is_fetch) {
-			instr_fetch_t *fetch = (instr_fetch_t *) & instr[i];
-			struct ir2_instruction *instr = ctx->instr_sched[i].instr;
+			instr_fetch_t *fetch = &instr[i].fetch;
+			struct ir2_instr *instr = ctx->instr_sched[j].instr;
 			struct ir2_fetch_info *info =
 				&ctx->info->fetch_info[ctx->info->num_fetch_instrs++];
 			info->offset = i * 3;	/* add cf offset later */
 
 			if (fetch->opc == VTX_FETCH) {
-				struct ir2_reg_component *comp =
-					get_components(ctx, instr);
-				memset(info->vtx.swiz, 0xff, sizeof(info->vtx.swiz));
-				for (int i = 0; i < instr->num_components; i++) {
-					if (comp[i].comp >= 0)
-						info->vtx.swiz[comp[i].comp] = i;
-				}
-			} else {
-				info->tex.samp_id = instr->fetch.samp_id;
+				info->vtx.dst_swiz = fetch->vtx.dst_swiz;
+			} else if (fetch->opc == TEX_FETCH) {
+				info->tex.samp_id = instr->fetch.tex.samp_id;
 				info->tex.src_swiz = fetch->tex.src_swiz;
+			} else {
+				ctx->info->num_fetch_instrs--;
 			}
 		}
 
 		/* exec cf after 6 instr or when switching between fetch / alu */
-		if (exec.count == 6 || (exec.count && need_sync)) {
-			num_cf =
-				write_cfs(ctx, cfs, num_cf, need_alloc ? &alloc : NULL,
-						  &exec);
+		if (exec.count == 6 || (exec.count && (need_sync || block != block_idx))) {
+			num_cf = write_cfs(ctx, cfs, num_cf, need_alloc ? &alloc : NULL, &exec);
 			need_alloc = false;
 		}
 
+		while (block_idx < block) {
+			//printf("set_addr %u %u\n", block_idx, num_cf);
+			block_addr[++block_idx] = num_cf;
+		}
+
 		/* export - fill alloc cf */
-		if (!is_fetch && instr[i].export_data) {
+		if (!is_fetch && instr[i].alu.export_data) {
 			/* get the export buffer from either vector/scalar dest */
 			instr_alloc_type_t buffer =
-				export_buffer(instr[i].vector_dest);
-			if (instr[i].scalar_write_mask) {
-				if (instr[i].vector_write_mask)
-					assert(buffer == export_buffer(instr[i].scalar_dest));
-				buffer = export_buffer(instr[i].scalar_dest);
+				export_buf(instr[i].alu.vector_dest);
+			if (instr[i].alu.scalar_write_mask) {
+				if (instr[i].alu.vector_write_mask)
+					assert(buffer == export_buf(instr[i].alu.scalar_dest));
+				buffer = export_buf(instr[i].alu.scalar_dest);
 			}
-
-			if (alloc.buffer_select == 0)
-				assert(buffer == SQ_PARAMETER_PIXEL);
 
 			/* flush previous alloc if the buffer changes */
 			bool need_new_alloc = buffer != alloc.buffer_select;
 
 			/* memory export always in 32/33 pair, new alloc on 32 */
-			if (instr[i].vector_dest == 32)
+			if (instr[i].alu.vector_dest == 32)
 				need_new_alloc = true;
 
-			if (need_new_alloc && need_alloc) {
-				num_cf = write_cfs(ctx, cfs, num_cf, &alloc, &exec);
+			if (need_new_alloc && exec.count) {
+				num_cf = write_cfs(ctx, cfs, num_cf, need_alloc ? &alloc : NULL, &exec);
 				need_alloc = false;
 			}
 
@@ -420,7 +491,10 @@ void assemble(struct ir2_context *ctx)
 			alloc.buffer_select = buffer;
 
 			if (buffer == SQ_PARAMETER_PIXEL)
-				alloc.size = ctx->info->max_export;
+				alloc.size = ctx->so->f.inputs_count - 1;
+
+			if (buffer == SQ_POSITION)
+				alloc.size = ctx->so->writes_psize;
 		}
 
 		if (is_fetch)
@@ -430,6 +504,7 @@ void assemble(struct ir2_context *ctx)
 
 		need_sync = false;
 		exec.count += 1;
+		i++;
 	}
 
 	/* final exec cf */
@@ -442,16 +517,21 @@ void assemble(struct ir2_context *ctx)
 		cfs[num_cf++] = (instr_cf_t) {
 		.opc = NOP};
 
-	/* offset cf addrs */
+	/* patch cf addrs */
 	for (int idx = 0; idx < num_cf; idx++) {
 		switch (cfs[idx].opc) {
+		case NOP:
+		case ALLOC:
+			break;
 		case EXEC:
 		case EXEC_END:
 			cfs[idx].exec.address += num_cf / 2;
 			break;
-		default:
+		case COND_JMP:
+            cfs[idx].jmp_call.address = block_addr[cfs[idx].jmp_call.address];
 			break;
-			/* XXX  and any other address using cf that gets implemented */
+		default:
+			assert(0);
 		}
 	}
 

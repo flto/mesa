@@ -49,28 +49,20 @@ struct fd2_shader_stateobj {
 		unsigned ncomp;
 	} immediates[64];
 
-	union {
-		/* vertex shader specific */
+	bool writes_psize;
+	bool need_param;
+
+	/* fragment shader info (vertex shader has copy) */
+	struct {
+		unsigned inputs_count;
 		struct {
-			/* linked fragment shader */
-			struct fd2_shader_stateobj *fp;
-		} v;
+			uint8_t slot;
+			uint8_t ncomp;
+		} inputs[16];
 
-		/* fragment shader specific */
-		struct {
-			unsigned inputs_count;
-			struct {
-				uint8_t slot;
-				uint8_t ncomp;
-			} inputs[16 + 2];  /* +POSITION +FACE */
-
-			/* driver_location of fragcoord, -1 if not used */
-			int frag_coord;
-		} f;
-	};
-
-
-
+		/* driver_location of fragcoord, -1 if not used */
+		int fragcoord;
+	} f;
 };
 
 void fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,

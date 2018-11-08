@@ -26,241 +26,15 @@
 
 #include "ir2_private.h"
 
-static bool
-need_result(struct ir2_instruction *p, bool param_export, bool mem_export)
+static bool scalar_possible(struct ir2_instr *instr)
 {
-	if (p->instr_type == IR2_FETCH)
+	if (instr->alu.scalar_opc == SCALAR_NONE)
 		return false;
 
-	/* instructions that have side effects */
-	switch (p->alu.scalar_opc) {
-	case KILLEs:
-	case KILLNEs:
-		return true;
-	}
-
-	if (p->alu.export < 0)
-		return false;
-
-	if (!param_export && p->alu.export < 32)
-		return false;
-
-	if (!mem_export && (p->alu.export == 32 || p->alu.export == 33))
-		return false;
-
-	return true;
+	return src_ncomp(instr) == 1;
 }
 
-static unsigned reg_alloc(struct ir2_context *ctx)
-{
-	//assert(ctx->regmask != ~0ull);
-	//unsigned idx;
-	//idx = ffsll(~ctx->regmask) - 1;
-	//ctx->regmask |= (1ull << idx);
-
-	unsigned idx;
-	for (idx = 0; idx < 64; idx++) {
-		if (!mask_isset(ctx->reg_state, idx * 4 + 0) &&
-			!mask_isset(ctx->reg_state, idx * 4 + 1) &&
-			!mask_isset(ctx->reg_state, idx * 4 + 2) &&
-			!mask_isset(ctx->reg_state, idx * 4 + 3))
-			break;
-	}
-	assert(idx != 64);
-
-	ctx->info->max_reg = MAX2(ctx->info->max_reg, (int) idx);
-
-	return idx;
-}
-
-static unsigned reg_alloc_input(struct ir2_context *ctx, unsigned idx)
-{
-	mask_set(ctx->reg_state, idx * 4 + 0);
-	mask_set(ctx->reg_state, idx * 4 + 1);
-	mask_set(ctx->reg_state, idx * 4 + 2);
-	mask_set(ctx->reg_state, idx * 4 + 3);
-
-	ctx->info->max_reg = MAX2(ctx->info->max_reg, (int) idx);
-
-	return idx;
-}
-
-static void
-update_refs(struct ir2_context *ctx, bool param_export, bool mem_export)
-{
-	struct ir2_instruction *p;
-
-	/* initializations */
-	ir2_foreach_instr(instr, ctx) {
-		instr->required = 0;
-		instr->emitted = 0;
-		instr->alloc.reg = -1;
-		instr->alloc.mask = 0;
-
-		for (int i = 0; i < 4; i++) {
-			instr->components[i].comp = is_export(instr) ? i : -1;
-			instr->components[i].ref_count = 0;
-		}
-	}
-
-	/* mark instructions as required */
-	for (int i = ctx->instr_count; i-- > 0;) {
-		struct ir2_instruction *instr = &ctx->instr[i];
-
-		if (need_result(instr, param_export, mem_export))
-			instr->required = true;
-
-		if (instr->reg_idx >= 0) {
-			p = &ctx->instr[instr->reg_idx];
-			if (p->required)
-				instr->required = true;
-		}
-
-		if (!instr->required) {
-			instr->instr_type = IR2_NONE;
-			continue;
-		}
-
-		ir2_foreach_src_reg(reg, instr) {
-			if (is_const(reg) || is_input(reg))
-				continue;
-
-			p = &ctx->instr[reg->num];
-			p->required = true;
-		}
-	}
-
-	/* compute per-component ref_counts */
-	ir2_foreach_instr(instr, ctx) {
-		unsigned nc = num_src_comps(instr);
-
-		if (is_export(instr) && instr->alu.export < 32)
-			ctx->info->max_export =
-				MAX2(ctx->info->max_export, instr->alu.export);
-
-		ir2_foreach_src_reg(reg, instr) {
-			if (is_const(reg))
-				continue;
-
-			if (is_input(reg)) {
-				assert(reg->num < ARRAY_SIZE(ctx->input));
-				ctx->input[reg->num].used_count++;
-				continue;
-			}
-
-			p = &ctx->instr[reg->num];
-
-			for (int i = 0; i < nc; i++) {
-				unsigned c = swiz_get(reg->swizzle, i);
-				assert(c < p->num_components || p->reg_idx >= 0);
-				p->components[c].ref_count++;
-			}
-		}
-	}
-}
-
-static void comp_free(struct ir2_context *ctx, struct ir2_instruction *p,
-					  unsigned i)
-{
-	struct ir2_alloc *alloc = get_alloc(ctx, p);
-	struct ir2_reg_component *c = &p->components[i];
-
-	assert(c->comp >= 0);
-	assert(alloc->reg >= 0);
-	assert(c->ref_count);
-	assert(alloc->mask & 1 << c->comp);
-
-	c->ref_count--;
-	if (c->ref_count)
-		return;
-
-	alloc->mask &= ~(1 << c->comp);
-	mask_unset(ctx->reg_state, alloc->reg * 4 + c->comp);
-}
-
-static void instr_ra_update(struct ir2_context *ctx,
-							struct ir2_instruction *instr)
-{
-	struct ir2_instruction *p;
-	struct ir2_alloc *alloc;
-	unsigned nc;
-
-	nc = num_src_comps(instr);
-
-	ir2_foreach_src_reg(reg, instr) {
-		if (is_const(reg))
-			continue;
-
-		// XXX input not using per component RA
-		if (is_input(reg)) {
-			struct ir2_input_reg *r = &ctx->input[reg->num];
-			assert(r->used_count);
-			--r->used_count;
-			if (!r->used_count) {
-				mask_unset(ctx->reg_state, r->alloc * 4 + 0);
-				mask_unset(ctx->reg_state, r->alloc * 4 + 1);
-				mask_unset(ctx->reg_state, r->alloc * 4 + 2);
-				mask_unset(ctx->reg_state, r->alloc * 4 + 3);
-			}
-			continue;
-		}
-
-		p = &ctx->instr[reg->num];
-
-		for (int i = 0; i < nc; i++) {
-			unsigned c = swiz_get(reg->swizzle, i);
-			assert(c < p->num_components || p->reg_idx >= 0);
-			comp_free(ctx, p, c);
-		}
-	}
-
-	if (is_export(instr))
-		return;
-
-	alloc = get_alloc(ctx, instr);
-
-	if (alloc->reg < 0 || alloc->mask == 0)
-		alloc->reg = reg_alloc(ctx);
-
-	struct ir2_reg_component *comp =
-		instr->reg_idx <
-		0 ? instr->components : ctx->instr[instr->reg_idx].components;
-	int j = 0;
-
-	for (int i = 0; i < instr->num_components; j++, comp++) {
-		assert(j < 4);
-
-		if (instr->instr_type == IR2_ALU
-			&& !(instr->alu.write_mask & 1 << j))
-			continue;
-
-		if (!comp->ref_count) {
-			i++;
-			continue;
-		}
-
-		assert(alloc->mask != 0xf);
-		assert(comp->comp == -1);
-		comp->comp = ffs(~alloc->mask) - 1;
-
-		assert(!mask_isset(ctx->reg_state, alloc->reg * 4 + comp->comp));
-
-		alloc->mask |= 1 << comp->comp;
-		mask_set(ctx->reg_state, alloc->reg * 4 + comp->comp);
-		i++;
-	}
-}
-
-static bool scalar_possible(struct ir2_instruction *instr)
-{
-	if (instr->alu.scalar_opc < 0)
-		return false;
-
-	return instr->num_components == 1;
-}
-
-static bool is_compatible(struct ir2_instruction *a,
-						  struct ir2_instruction *b)
+static bool is_alu_compatible(struct ir2_instr *a, struct ir2_instr *b)
 {
 	if (!a)
 		return true;
@@ -268,18 +42,197 @@ static bool is_compatible(struct ir2_instruction *a,
 	if (a == b)
 		return false;
 
-	return (is_export(a) == is_export(b));
+	/* there seems to be issues when an instr writes to different exports */
+	return a->alu.export == b->alu.export;
 }
 
-/* do required magic to convert a 2 src instr to a scalar instr */
-static bool
-insert_scalar(struct ir2_context *ctx, struct ir2_instruction *instr)
+static unsigned alu_vector_prio(struct ir2_instr *instr)
 {
-	// XXX to be implemented
+    if (instr->alu.vector_opc == VECTOR_NONE)
+		return ~0u;
+
+	if (is_export(instr))
+		return 4;
+
+	/* TODO check src type and ncomps */
+	if (instr->src_count == 3)
+		return 0;
+
+    if (!scalar_possible(instr))
+		return 1;
+
+	return instr->src_count == 2 ? 2 : 3;
+}
+
+static unsigned alu_scalar_prio(struct ir2_instr *instr)
+{
+	if (!scalar_possible(instr))
+		return ~0u;
+
+	/* this case is dealt with later */
+	if (instr->src_count > 1)
+		return ~0u;
+
+	if (is_export(instr))
+		return 4;
+
+	/* scalar only have highest priority */
+	return instr->alu.vector_opc == VECTOR_NONE ? 0 : 3;
+}
+
+static struct ir2_sched_instr*
+insert(struct ir2_context *ctx, unsigned block_idx, unsigned reg_idx,
+	struct ir2_src src1, unsigned *comp)
+{
+	struct ir2_sched_instr *sched = NULL, *s;
+    unsigned i, mask = 0xf;
+
+	/* go first earliest point where the mov can be inserted */
+	for (i = ctx->instr_sched_count-1; i > 0; i--) {
+		s = &ctx->instr_sched[i - 1];
+
+		if (s->instr && s->instr->block_idx != block_idx)
+			break;
+		if (s->instr_s && s->instr_s->block_idx != block_idx)
+			break;
+
+		if (src1.type == IR2_SRC_SSA) {
+            if ((s->instr && s->instr->idx == src1.num) ||
+				(s->instr_s && s->instr_s->idx == src1.num))
+				break;
+		}
+
+		unsigned mr = ~(s->reg_state[reg_idx/8] >> reg_idx%8*4 & 0xf);
+		if ((mask & mr) == 0)
+			break;
+
+		mask &= mr;
+		if (s->instr_s || s->instr->src_count == 3)
+			continue;
+
+		if (s->instr->type != IR2_ALU || s->instr->alu.export >= 0)
+			continue;
+
+		sched = s;
+	}
+	*comp = ffs(mask) - 1;
+	return sched;
+}
+
+/* case0: in this case, we use MUL_CONST_0/ADD_CONST_0 to get 2src scalar */
+static bool
+scalarize_case0(struct ir2_context *ctx, struct ir2_instr *instr, bool order)
+{
+	struct ir2_src src0 = instr->src[ order];
+	struct ir2_src src1 = instr->src[!order];
+	struct ir2_reg *reg;
+	struct ir2_reg_component *comp;
+	unsigned dst_comp;
+
+	/* it doesn't work.. maybe I misundestood these _CONST instructions */
+	return false;
+
+	for (dst_comp = 0; !(instr->alu.write_mask & 1 << dst_comp) ; dst_comp++);
+
+	/* more than a single write, not sure if thats possible */
+	if (instr->alu.write_mask != (1 << dst_comp))
+		return false;
+
+	switch (src0.type) {
+	case IR2_SRC_CONST:
+	case IR2_SRC_INPUT:
+		return false;
+	default:
+		break;
+	}
+
+    if (src0.negate || src0.abs)
+		return false;
+
+	reg = get_reg_src(ctx, &src0);
+	comp = &reg->comp[swiz_get(src0.swizzle, 0)];
+
+	/* wont be free, so we cant use it as new dst */
+	if (comp->ref_count != 1 || reg->block_idx_free >= 0)
+		return false;
+
+    get_reg(instr)->comp[ffs(instr->alu.write_mask)-1] = *comp;
+    get_reg(instr)->idx = reg->idx;
+    instr->alu.scalar_opc = instr->alu.scalar_opc == ADDs ? ADD_CONST_0 : MUL_CONST_0;
+    instr->src_count = 1;
+    instr->src[0] = src1;
+
+
+	return true;
+}
+
+/* case1:
+ * in this case, insert a mov to place the 2nd src into to same reg
+ */
+static bool
+scalarise_case1(struct ir2_context *ctx, struct ir2_instr *instr, bool order)
+{
+	struct ir2_src src0 = instr->src[ order];
+	struct ir2_src src1 = instr->src[!order];
+	struct ir2_sched_instr *sched;
+	struct ir2_instr *ins;
+	unsigned idx, reg_idx, comp;
+
+	switch (src0.type) {
+	case IR2_SRC_CONST:
+	case IR2_SRC_INPUT:
+		return false;
+	default:
+		break;
+	}
+
+	/* TODO, insert needs logic for this */
+	if (src1.type == IR2_SRC_REG)
+		return false;
+
+	/* we could do something if they match src1.. */
+    if (src0.negate || src0.abs)
+		return false;
+
+	reg_idx = get_reg_src(ctx, &src0)->idx;
+
+    /* find a place to insert the mov */
+	sched = insert(ctx, instr->block_idx, reg_idx, src1, &comp);
+	if (!sched)
+		return false;
+
+	ins = &ctx->instr[idx = ctx->instr_count++];
+	ins->idx = idx;
+	ins->type = IR2_ALU;
+	ins->src[0] = src1;
+	ins->src_count = 1;
+	ins->is_ssa = true;
+	ins->ssa.idx = reg_idx;
+	ins->ssa.ncomp = 1;
+	ins->ssa.comp[0].c = comp;
+	ins->alu.scalar_opc = MAXs;
+	ins->alu.export = -1;
+	ins->alu.write_mask = 1;
+	ins->pred = instr->pred;
+	ins->block_idx = instr->block_idx;
+
+	instr->src[0] = src0;
+	instr->alu.src1_swizzle = comp;
+
+	sched->instr_s = ins;
+	return true;
+}
+
+#if 0
+/* insert two src scalar if possible */
+static bool
+insert_scalar(struct ir2_context *ctx, struct ir2_instr *instr)
+{
+	/* TODO */
 	if (is_input(&instr->src_reg[0]) || is_input(&instr->src_reg[1]))
 		return false;
 
-	// XXX to be implemented
+	/* TODO */
 	if (is_const(&instr->src_reg[0]) && is_const(&instr->src_reg[1]))
 		return false;
 
@@ -290,6 +243,8 @@ insert_scalar(struct ir2_context *ctx, struct ir2_instruction *instr)
 	 * -redirect directly to avoid MOV
 	 * TODO if there is an empty vec instr, use vector mov
 	 */
+
+	struct ir2_reg_component *comps;
 
 	struct ir2_src *a, *b;
 	struct ir2_alloc *alloc;
@@ -304,30 +259,11 @@ insert_scalar(struct ir2_context *ctx, struct ir2_instruction *instr)
 	p = &ctx->instr[a->num];
 	alloc = get_alloc(ctx, p);
 
-	// XXX to be implemented
+	/* TODO */
 	if (is_neg(a) || is_abs(a))
 		return false;
 
-	/* go first earliest point where the mov can be inserted */
-	for (i = ctx->instr_sched_count; i > 0; i--) {
-		s = &ctx->instr_sched[i - 1];
 
-		if (!is_const(b)) {
-			if (s->instr && s->instr->idx == b->num)
-				break;
-			if (s->instr_s && s->instr_s->idx == b->num)
-				break;
-		}
-
-		unsigned mr = ~mask_reg(s->reg_state, alloc->reg);
-		if ((mask & mr) == 0)
-			break;
-
-		mask &= mr;
-		if (!s->instr_s && s->instr->src_reg_count != 3
-			&& s->instr->instr_type == IR2_ALU && s->instr->alu.export < 0)
-			sched = s;
-	}
 	if (!sched)
 		return false;
 
@@ -344,23 +280,8 @@ insert_scalar(struct ir2_context *ctx, struct ir2_instruction *instr)
 	x->alu.export = -1;
 	x->alu.write_mask = 1;
 
-	if (!is_const(b)) {
-		struct ir2_instruction *p;
-		p = &ctx->instr[b->num];
-
-		unsigned c = swiz_get(b->swizzle, 0);
-		assert(c < p->num_components || p->reg_idx >= 0);
-		comp_free(ctx, p, c);
-
-		/*
-		   struct ir2_reg_component *c = &p->components[swiz_get(b->swizzle, 0)];
-		   assert(*c->ref_count_p);
-		   (*c->ref_count_p)--;
-		   if (!*c->ref_count_p) {
-		   get_alloc(ctx, p)->mask &= ~(1 << c->comp);
-		   mask_unset(ctx->reg_state, c->comp + get_alloc(ctx, p)->alloc*4);
-		   } */
-	}
+	if (!is_const(b))
+		free_comp(ctx, &get_components_src(ctx, b)[swiz_get(b->swizzle, 0)], get_alloc_src(ctx, b));
 
 	x->components[0].comp = ffs(mask) - 1;
 	x->components[0].ref_count = 1;
@@ -387,188 +308,220 @@ insert_scalar(struct ir2_context *ctx, struct ir2_instruction *instr)
 
 	return true;
 }
+#endif
+
+static int fill_sched(struct ir2_context *ctx, struct ir2_sched_instr *sched)
+{
+	struct ir2_instr *avail[0x100], *instr_v = NULL, *instr_s = NULL;
+	unsigned avail_count = 0;
+
+	instr_alloc_type_t export = ~0u;
+	int block_idx = -1;
+
+	/* XXX merge this loop with the other one somehow? */
+	ir2_foreach_instr(instr, ctx) {
+		if (!instr->need_emit)
+			continue;
+		if (is_export(instr))
+			export = MIN2(export, export_buf(instr->alu.export));
+	}
+
+	ir2_foreach_instr(instr, ctx) {
+		if (!instr->need_emit)
+			continue;
+
+		/* dont mix exports */
+		if (is_export(instr) && export_buf(instr->alu.export) != export)
+			continue;
+
+		if (block_idx < 0)
+			block_idx = instr->block_idx;
+		else if (block_idx != instr->block_idx || /* must be same block */
+			instr->type == IR2_CF || /* CF/MEM must be alone */
+			(is_export(instr) && export == SQ_MEMORY))
+			break;
+		/* it works because IR2_CF is always at end of block
+		 * and somewhat same idea with MEM exports, which might not be alone
+		 * but will end up in-order at least
+		 */
+
+		/* check if dependencies are satisfied */
+		bool is_ok = true;
+		ir2_foreach_src(src, instr) {
+			if (src->type == IR2_SRC_REG) {
+                /* need to check if all previous instructions in the block
+                 * which write the reg have been emitted
+                 * slow..
+                 * XXX: check components instead of whole register
+                 */
+				struct ir2_reg *reg = get_reg_src(ctx, src);
+				ir2_foreach_instr(p, ctx) {
+					if (!p->is_ssa && p->reg == reg && p->idx < instr->idx)
+						is_ok &= !p->need_emit;
+				}
+			} else if (src->type == IR2_SRC_SSA) {
+				/* in this case its easy, just check need_emit */
+				is_ok &= !ctx->instr[src->num].need_emit;
+			}
+		}
+		if (!is_ok)
+			continue;
+
+		avail[avail_count++] = instr;
+	}
+
+	if (!avail_count) {
+		assert(block_idx == -1);
+		return -1;
+	}
+
+	/* priority to FETCH instructions */
+	ir2_foreach_avail(instr) {
+        if (instr->type == IR2_ALU)
+			continue;
+
+		ra_src_free(ctx, instr);
+		ra_reg(ctx, get_reg(instr), -1, false, 0);
+
+		instr->need_emit = false;
+		sched->instr = instr;
+		sched->instr_s = NULL;
+		return block_idx;
+	}
+
+	/* TODO precompute priorities */
+
+	unsigned prio_v = ~0u, prio_s = ~0u, prio;
+	ir2_foreach_avail(instr) {
+		prio = alu_vector_prio(instr);
+		if (prio < prio_v) {
+			instr_v = instr;
+			prio_v = prio;
+		}
+	}
+
+	/* TODO can still insert scalar if src_count=3, if smart about it */
+	if (!instr_v || instr_v->src_count < 3) {
+		ir2_foreach_avail(instr) {
+			bool compat = is_alu_compatible(instr_v, instr);
+
+			prio = alu_scalar_prio(instr);
+			if (prio >= prio_v && !compat)
+				continue;
+
+			if (prio < prio_s) {
+				instr_s = instr;
+				prio_s = prio;
+				if (!compat)
+					instr_v = NULL;
+			}
+		}
+	}
+
+	assert(instr_v || instr_s);
+
+	if (instr_v) {
+		instr_v->need_emit = false;
+		ra_src_free(ctx, instr_v);
+	}
+
+	/* now, we try more complex insertion of vector instruction as scalar */
+	if (!instr_s && instr_v->src_count < 3) {
+		ir2_foreach_avail(instr) {
+			if (!is_alu_compatible(instr_v, instr) || !scalar_possible(instr))
+				continue;
+
+			/* at this point, src_count should always be 2 */
+            assert(instr->src_count == 2);
+
+            /* possible instructions at this point:
+             * add, mul, min, max
+             */
+			if (instr->alu.vector_opc == ADDv ||
+				instr->alu.vector_opc == MULv) {
+                if (scalarize_case0(ctx, instr, 0)) {
+					instr_s = instr;
+					break;
+				}
+				if (scalarize_case0(ctx, instr, 1)) {
+					instr_s = instr;
+					break;
+				}
+			}
+
+            if (scalarise_case1(ctx, instr, 0)) {
+				instr_s = instr;
+				break;
+			}
+			if (scalarise_case1(ctx, instr, 1)) {
+				instr_s = instr;
+				break;
+			}
+		}
+	}
+
+	if (instr_s) {
+		instr_s->need_emit = false;
+		ra_src_free(ctx, instr_s);
+	}
+
+	if (instr_v)
+		ra_reg(ctx, get_reg(instr_v), -1, is_export(instr_v), instr_v->alu.write_mask);
+
+	if (instr_s)
+		ra_reg(ctx, get_reg(instr_s), -1, is_export(instr_s), instr_s->alu.write_mask);
+
+	sched->instr = instr_v;
+	sched->instr_s = instr_s;
+	return block_idx;
+}
 
 /* scheduling: determine order of instructions */
 static void schedule_instrs(struct ir2_context *ctx)
 {
-	struct ir2_instruction *instr_v, *instr_s;
-	struct ir2_instruction *avail[0x100];
 	struct ir2_sched_instr *sched;
-	unsigned avail_count;
-	bool no_instr;
+	int block_idx;
 
-	struct ir2_instruction *p;
+	/* allocate input registers */
+	for (unsigned idx = 0; idx < ARRAY_SIZE(ctx->input); idx++)
+		if (ctx->input[idx].initialized)
+			ra_reg(ctx, &ctx->input[idx], idx, false, 0);
 
-	for (;; ctx->instr_sched_count++) {
-		sched = &ctx->instr_sched[ctx->instr_sched_count];
-		avail_count = 0;
-		no_instr = true;
-
-		/* find instructions that can be emitted */
-		ir2_foreach_instr(instr, ctx) {
-			if (instr->emitted)
-				continue;
-
-			no_instr = false;
-
-			bool is_ok = true;
-			unsigned nc = num_src_comps(instr);
-			ir2_foreach_src_reg(reg, instr) {
-				if (is_const(reg) || is_input(reg))
-					continue;
-
-				p = &ctx->instr[reg->num];
-
-				for (int i = 0; i < nc; i++) {
-					unsigned c = swiz_get(reg->swizzle, i);
-					assert(c < p->num_components || p->reg_idx >= 0);
-					if (p->components[c].comp < 0)
-						is_ok = false;
-				}
-			}
-			if (!is_ok)
-				continue;
-
-			/* check if export is compatible with current export */
-			if (is_export(instr)) {
-				unsigned export = instr->alu.export;
-				if (ctx->prev_export == 32 && export != 33)
-					continue;
-				if (ctx->prev_export == 33 && export != 32)
-					continue;
-
-				bool compatible = true;
-				ir2_foreach_instr(b, ctx) {
-					if (b->emitted)
-						continue;
-
-					if (!is_export(b)) {
-						if (export == 32 || export == 33) {
-							compatible = false;
-							break;
-						}
-						// XXX exports in same CF ?
-						//continue;
-						compatible = false;
-						break;
-					}
-
-					if (export_order(instr->alu.export) >
-						export_order(b->alu.export)) {
-						compatible = false;
-						break;
-					}
-				}
-
-				if (!compatible)
-					continue;
-
-				ctx->prev_export = instr->alu.export;
-			}
-
-			avail[avail_count++] = instr;
-
-			//XXX
-			if (is_export(instr)
-				&& export_buffer(instr->alu.export) == SQ_MEMORY)
-				break;
-		}
-
-		if (!avail_count) {
-			assert(no_instr);
+	for (;;) {
+		sched = &ctx->instr_sched[ctx->instr_sched_count++];
+		block_idx = fill_sched(ctx, sched);
+		if (block_idx < 0)
 			break;
-		}
-
-		ir2_foreach_avail(instr) {
-			if (instr->instr_type != IR2_FETCH)
-				continue;
-
-			instr->emitted = true;
-			sched->instr = instr;
-			sched->instr_s = NULL;
-
-			instr_ra_update(ctx, instr);
-			goto continue_loop;
-		}
-
-		instr_v = NULL;
-		instr_s = NULL;
-
-		/* TODO the scheduling could be better.. */
-
-		/* fill instr_v */
-#define avail_match_v(res, cond) ({ \
-	ir2_foreach_avail(instr) { \
-	if (instr->alu.vector_opc >= 0 && (cond)) { \
-		res = instr; \
-		if (!is_export(instr)); break; \
-	} \
-} res; })
-		do {
-			/* pick vector instruction from 3 src set */
-			if (avail_match_v(instr_v, instr->src_reg_count == 3))
-				break;
-
-			/* pick vector instruction from non-scalarizable set */
-			if (avail_match_v(instr_v, !scalar_possible(instr)))
-				break;
-
-			/* pick vector instruction from 2 src set */
-			if (avail_match_v(instr_v, instr->src_reg_count == 2))
-				break;
-
-			/* pick any vector instruction */
-			avail_match_v(instr_v, 1);
-		} while (0);
-
-		/* fill instr_s */
-		if (!instr_v || instr_v->src_reg_count < 3) {
-			do {
-				/* first try scalar only op */
-				ir2_foreach_avail(instr) {
-					if (!is_compatible(instr_v, instr))
-						continue;
-					if (instr->alu.vector_opc >= 0)
-						continue;
-					instr_s = instr;
-					break;
-				}
-				if (instr_s)
-					break;
-
-				ir2_foreach_avail(instr) {
-					if (!is_compatible(instr_v, instr)
-						|| !scalar_possible(instr))
-						continue;
-
-					if (instr->src_reg_count == 2
-						&& !insert_scalar(ctx, instr))
-						continue;
-
-					instr_s = instr;
-					break;
-				}
-			} while (0);
-		}
-
-		/* TODO merge RA update so instr_v can use reg freed by instr_s */
-		if (instr_v) {
-			instr_v->emitted = true;
-			instr_ra_update(ctx, instr_v);
-		}
-
-		if (instr_s) {
-			instr_s->emitted = true;
-			instr_ra_update(ctx, instr_s);
-		}
-
-		assert(instr_v || instr_s);
-
-		sched->instr = instr_v;
-		sched->instr_s = instr_s;
-	  continue_loop:;
 		memcpy(sched->reg_state, ctx->reg_state, sizeof(ctx->reg_state));
+
+		/* catch texture fetch after scheduling and insert the
+		 * SET_TEX_LOD right before it if necessary
+		 * TODO clean this up
+		 */
+		struct ir2_instr *instr = sched->instr, *instr2;
+		if (instr && instr->type == IR2_FETCH &&
+			instr->fetch.opc == TEX_FETCH && instr->src_count == 2) {
+			/* generate the SET_LOD instruction */
+			instr2 = &ctx->instr[ctx->instr_count++];
+			instr2->type = IR2_FETCH;
+			instr2->block_idx = instr->block_idx;
+			instr2->pred = instr->pred;
+			instr2->fetch.opc = TEX_SET_TEX_LOD;
+			instr2->src[0] = instr->src[1];
+			instr2->src_count = 1;
+
+			sched[1] = sched[0];
+			sched->instr = instr2;
+			ctx->instr_sched_count++;
+		}
+
+		bool free_block = true;
+		ir2_foreach_instr(instr, ctx)
+			free_block &= instr->block_idx != block_idx;
+		if (free_block)
+			ra_block_free(ctx, block_idx);
 	};
+	ctx->instr_sched_count--;
 }
 
 void ir2_compile(struct fd2_shader_stateobj *so, unsigned variant)
@@ -578,39 +531,22 @@ void ir2_compile(struct fd2_shader_stateobj *so, unsigned variant)
 
 	ctx.so = so;
 	ctx.info = info;
-
 	info->max_reg = -1;
-	info->max_export = -1;
 
 	/* convert nir to internal representation */
-	ir2_nir_compile(&ctx);
+	ir2_nir_compile(&ctx, variant);
 
 	/* remove movs used for loading inputs/constants/uniforms */
 	substitutions(&ctx);
 
-	/* compute dependencies..? (do some work with nir?) */
-	update_refs(&ctx, !variant, variant);
+	/* get ref_counts and kill non-needed instructions */
+	ra_count_refs(&ctx);
 
 	/* remove movs used to write outputs */
 	late_substitutions(&ctx);
 
-	/* allocate input registers */
-	memset(ctx.reg_state, 0, sizeof(ctx.reg_state));
-	for (int i = 0; i < ARRAY_SIZE(ctx.input); i++) {
-		if (ctx.input[i].used_count)
-			ctx.input[i].alloc = reg_alloc_input(&ctx, i);
-	}
-
 	/* instruction order.. and vector->scalar conversions */
 	schedule_instrs(&ctx);
-
-	/* validation */
-	ir2_foreach_instr(instr, &ctx) {
-		for (int i = 0; i < 4; i++)
-			assert(instr->components[i].ref_count == 0);
-	}
-	for (int i = 0; i < ARRAY_SIZE(ctx.reg_state); i++)
-		assert(ctx.reg_state[i] == 0);
 
 	/* finally, assemble to bitcode */
 	assemble(&ctx);

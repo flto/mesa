@@ -508,6 +508,16 @@ fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, A2XX_PA_SC_WINDOW_OFFSET_X(-tile->xoff) |
 			A2XX_PA_SC_WINDOW_OFFSET_Y(-tile->yoff));
 
+	/* parameters for fragcoord in fragment shader (C64.xy)
+	 * TODO: invert Y here instead of letting NIR do it
+	 */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+	OUT_RING(ring, 0x00000580);
+	OUT_RING(ring, fui(1.0f));
+	OUT_RING(ring, fui(1.0f));
+	OUT_RING(ring, fui(tile->xoff + 0.5f));
+	OUT_RING(ring, fui(tile->yoff + 0.5f));
+
 	if (batch->fast_clear.buffers) {
 		ctx->emit_ib(batch->gmem, batch->fast_clear.ring);
 

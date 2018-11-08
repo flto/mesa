@@ -110,14 +110,15 @@ fd2_fp_state_create(struct pipe_context *pctx,
         so->nir = ir2_tgsi_to_nir(cso->tokens);
 	}
 
-	if (ir2_optimize_nir(so->nir))
+	if (ir2_optimize_nir(so->nir, true))
 		goto fail;
+
+	so->first_immediate = so->nir->num_uniforms;
 
 	ir2_compile(so, 0);
 
 	ralloc_free(so->nir);
 	so->nir = NULL;
-
 	return so;
 
 fail:
@@ -149,11 +150,12 @@ fd2_vp_state_create(struct pipe_context *pctx,
         so->nir = ir2_tgsi_to_nir(cso->tokens);
 	}
 
-	if (ir2_optimize_nir(so->nir))
+	if (ir2_optimize_nir(so->nir, true))
 		goto fail;
 
-	/* can't compile the vertex shader here, as it depends on fs */
+	so->first_immediate = so->nir->num_uniforms;
 
+	/* can't compile the vertex shader here, as it depends on fs */
 	return so;
 
 fail:
@@ -170,7 +172,7 @@ fd2_vp_state_delete(struct pipe_context *pctx, void *hwcso)
 
 static void
 patch_vtx_fetch(struct fd_context *ctx, struct pipe_vertex_element *elem,
-	instr_fetch_vtx_t *instr, int8_t *swizzle)
+	instr_fetch_vtx_t *instr, uint16_t dst_swiz)
 {
 	struct pipe_vertex_buffer *vb =
 				&ctx->vtx.vertexbuf.vb[elem->vertex_buffer_index];
@@ -192,7 +194,8 @@ patch_vtx_fetch(struct fd_context *ctx, struct pipe_vertex_element *elem,
 
 	unsigned swiz = 0;
 	for (int i = 0; i < 4; i++) {
-		swiz |= (swizzle[i] < 0 ? 7 : desc->swizzle[swizzle[i]]) << i*3;
+		unsigned s = dst_swiz >> i*3 & 7;
+		swiz |= (s >= 4 ? s : desc->swizzle[s]) << i*3;
 	}
 	instr->dst_swiz = swiz;
 }
@@ -208,7 +211,7 @@ patch_fetches(struct fd_context *ctx, struct ir2_shader_info *info,
         if (instr->opc == VTX_FETCH) {
 			unsigned idx = (instr->vtx.const_index - 20) * 3 +
 				instr->vtx.const_index_sel;
-			patch_vtx_fetch(ctx, &vtx->pipe[idx], &instr->vtx, fi->vtx.swiz);
+			patch_vtx_fetch(ctx, &vtx->pipe[idx], &instr->vtx, fi->vtx.dst_swiz);
 			continue;
         }
 
@@ -232,12 +235,11 @@ fd2_program_validate(struct fd_context *ctx)
 		fp = ctx->solid_prog.fp;
 
 	/* recompile vertex shader when fragment shader changes */
-	if (vp->v.fp != fp) {
-		vp->v.fp = fp;
+	if (!vp->info[0].sizedwords || memcmp(&fp->f, &vp->f, sizeof(fp->f))) {
+		vp->f = fp->f;
 		ir2_compile(vp, 0);
 		ir2_compile(vp, 1);
 	}
-
 	/* patch fetch instructions */
 	patch_fetches(ctx, &vp->info[0], ctx->vtx.vtx, &ctx->tex[PIPE_SHADER_VERTEX]);
 	patch_fetches(ctx, &vp->info[1], ctx->vtx.vtx, &ctx->tex[PIPE_SHADER_VERTEX]);
@@ -250,7 +252,7 @@ fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 {
 	struct fd2_shader_stateobj *fp, *vp;
 	uint8_t vs_gprs, fs_gprs = 0, vs_export = 0;
-	bool b;
+	bool binning = (ring == batch->binning);
 
 	vp = prog->vp;
 	fp = prog->fp;
@@ -258,30 +260,38 @@ fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	if ((fd_mesa_debug & FD_DBG_FRAGS) && vp != batch->ctx->blit_prog[0].vp)
 		fp = batch->ctx->solid_prog.fp;
 
-	assert(vp->v.fp == fp);
-
 	emit(batch, ring, vp);
 
-	if (!(b = (ring == batch->binning))) {
+	if (!binning) {
 		emit(batch, ring, fp);
 		fs_gprs = (fp->info[0].max_reg < 0) ? 0x80 : fp->info[0].max_reg;
 		vs_export = MAX2(1, fp->f.inputs_count) - 1;
 	}
 
-	vs_gprs = (vp->info[b].max_reg < 0) ? 0x80 : vp->info[b].max_reg;
+	vs_gprs = (vp->info[binning].max_reg < 0) ? 0x80 : vp->info[binning].max_reg;
+
+	enum a2xx_sq_ps_vtx_mode mode = POSITION_1_VECTOR;
+	if (vp->writes_psize && !binning)
+		mode = POSITION_2_VECTORS_SPRITE;
+
+	/* set register to use for param (fragcoord/pointcoord/frontfacing) */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_SQ_CONTEXT_MISC));
+	OUT_RING(ring, A2XX_SQ_CONTEXT_MISC_SC_SAMPLE_CNTL(CENTERS_ONLY) |
+		A2XX_SQ_CONTEXT_MISC_PARAM_GEN_POS(fp->f.inputs_count) |
+		COND(fp->f.fragcoord >= 0, A2XX_SQ_CONTEXT_MISC_SC_OUTPUT_SCREEN_XY));
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_SQ_PROGRAM_CNTL));
-	OUT_RING(ring, A2XX_SQ_PROGRAM_CNTL_PS_EXPORT_MODE(POSITION_2_VECTORS_SPRITE) |
-			A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_MODE(0) |
+	OUT_RING(ring, A2XX_SQ_PROGRAM_CNTL_PS_EXPORT_MODE(2) |
+			A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_MODE(mode) |
 			A2XX_SQ_PROGRAM_CNTL_VS_RESOURCE |
 			A2XX_SQ_PROGRAM_CNTL_PS_RESOURCE |
 			A2XX_SQ_PROGRAM_CNTL_VS_EXPORT_COUNT(vs_export) |
 			A2XX_SQ_PROGRAM_CNTL_PS_REGS(fs_gprs) |
 			A2XX_SQ_PROGRAM_CNTL_VS_REGS(vs_gprs) |
-			/* generate R2 index for a20x hw binning */
-			((b && is_a20x(batch->ctx->screen)) ?
-				A2XX_SQ_PROGRAM_CNTL_GEN_INDEX_VTX : 0));
+			COND(fp->need_param, A2XX_SQ_PROGRAM_CNTL_PARAM_GEN) |
+			COND(binning, A2XX_SQ_PROGRAM_CNTL_GEN_INDEX_VTX));
 }
 
 void
@@ -300,11 +310,11 @@ fd2_prog_init(struct pipe_context *pctx)
 
 	fd_prog_init(pctx);
 
-	// XXX make this less hacky?
+	/* XXX maybe its possible to reuse patch_vtx_fetch somehow? */
 
 	prog = &ctx->solid_prog;
 	so = prog->vp;
-	so->v.fp = prog->fp;
+	so->f = ((struct fd2_shader_stateobj*) prog->fp)->f;
 	ir2_compile(prog->vp, 0);
 
 #define IR2_FETCH_SWIZ_XY01 0xb08
@@ -321,7 +331,7 @@ fd2_prog_init(struct pipe_context *pctx)
 
 	prog = &ctx->blit_prog[0];
 	so = prog->vp;
-	so->v.fp = prog->fp;
+	so->f = ((struct fd2_shader_stateobj*) prog->fp)->f;
 	ir2_compile(prog->vp, 0);
 
 	instr = (instr_fetch_vtx_t*) &so->info[0].dwords[so->info[0].fetch_info[0].offset];

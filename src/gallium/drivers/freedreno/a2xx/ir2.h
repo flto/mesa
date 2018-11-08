@@ -36,7 +36,7 @@ struct ir2_fetch_info {
 	union {
 		/* swizzle to merge with tgsi swizzle */
 		struct {
-			int8_t swiz[4];
+			uint16_t dst_swiz;
 		} vtx;
 		/* sampler id to patch const_idx */
 		struct {
@@ -56,9 +56,6 @@ struct ir2_shader_info {
 	/* highest GPR # used by shader */
 	int8_t max_reg;
 
-	/* highest PARAM/PIXEL export # */
-	int8_t max_export;
-
 	/* offset in dwords of first MEMORY export CF (for a20x hw binning) */
 	int16_t export32_offset;
 
@@ -77,6 +74,6 @@ struct nir_shader *ir2_tgsi_to_nir(const struct tgsi_token *tokens);
 
 const nir_shader_compiler_options *ir2_get_compiler_options(void);
 
-int ir2_optimize_nir(nir_shader * s);
+int ir2_optimize_nir(nir_shader *s, bool lower);
 
 #endif							/* IR2_H_ */

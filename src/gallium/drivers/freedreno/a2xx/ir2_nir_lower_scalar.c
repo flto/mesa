@@ -92,7 +92,9 @@ static bool lower_scalar(nir_alu_instr * instr, nir_builder * b)
 		return true;
 
 	switch (instr->op) {
-		LOWER_REDUCTION(nir_op_fall_equal, nir_op_seq, nir_op_fand);
+		/* TODO: handle these instead of lowering */
+		LOWER_REDUCTION(nir_op_fall_equal, nir_op_feq, nir_op_fand);
+		LOWER_REDUCTION(nir_op_fany_nequal, nir_op_fne, nir_op_for);
 
 	default:
 		return false;
