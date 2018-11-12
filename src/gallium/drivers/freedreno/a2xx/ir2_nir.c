@@ -297,6 +297,7 @@ ir2_instr_create(struct ir2_context *ctx, int type)
 static struct ir2_instr *
 instr_create_alu(struct ir2_context *ctx, nir_op opcode, unsigned ncomp)
 {
+	/* emit_alu will fixup instrs that don't map directly */
 	static const struct ir2_opc {
 		int8_t scalar, vector;
 	} nir_ir2_opc[nir_num_opcodes] = {
@@ -456,17 +457,18 @@ emit_alu(struct ir2_context *ctx, nir_alu_instr * alu)
 		instr->src[2] = ir2_zero();
 		break;
 	case nir_op_fsign: {
-		/* annoyingly, we need an extra instruction to handle the zero case
-		 * maybe the blob has a smarter method? */
-		struct ir2_instr *zero_one;
+		/* we need an extra instruction to deal with the zero case */
+		struct ir2_instr *tmp;
 
-		zero_one = instr_create_alu(ctx, nir_op_fcsel, ncomp);
-		zero_one->src[0] = instr->src[0];
-		zero_one->src[1] = ir2_zero();
-        zero_one->src[2] = load_const(ctx, (uint32_t[]) {fui(1.0f)}, 1);
-        zero_one->src[2].swizzle = swiz_merge(instr->src[2].swizzle, IR2_SWIZZLE_XXXX);
+		/* tmp = x == 0 ? 0 : 1 */
+		tmp = instr_create_alu(ctx, nir_op_fcsel, ncomp);
+		tmp->src[0] = instr->src[0];
+		tmp->src[1] = ir2_zero();
+        tmp->src[2] = load_const(ctx, (uint32_t[]) {fui(1.0f)}, 1);
+        tmp->src[2].swizzle = swiz_merge(instr->src[2].swizzle, IR2_SWIZZLE_XXXX);
 
-        instr->src[1] = ir2_src(zero_one->idx, 0, IR2_SRC_SSA);
+        /* result = x >= 0 ? tmp : -tmp */
+        instr->src[1] = ir2_src(tmp->idx, 0, IR2_SRC_SSA);
         instr->src[2] = instr->src[1];
         instr->src[2].negate = true;
 		instr->src_count = 3;
@@ -635,21 +637,16 @@ emit_intrinsic(struct ir2_context *ctx, nir_intrinsic_instr * intr)
 		instr->src_count = 1;
 		break;
 	case nir_intrinsic_load_front_face:
-		/* TODO
-	      ALU:	MAXv	R0.____ = R0, R0
-		    	RECIP_CLAMP	R3.x___ = R2.xyzx
-	      ALU:	CNDGTEv	R3.x___ = C30.yyzw, R3, C30
-	      ALU:	SETGTv	R4.x___ = R3, C0
-	      ALU:	SETGTv	R3.x___ = C0, R3
-	      ALU:	ADDv	R3.x___ = R4, -R3 CLAMP
-	      ALU:	SETEv	R3.___w = R3.xyzx, C0
-	EXEC ADDR(0x9) CNT(0x1)
-	      ALU:	MAXv	R0.____ = R0, R0
-		    	PRED_SETEs	R0.____ = R3
+		/* gl_FrontFacing is in the sign of param.x
+		 * rcp required because otherwise we can't differentiate -0.0 and +0.0
 		 */
 		ctx->so->need_param = true;
+
+		struct ir2_instr *tmp = instr_create_alu(ctx, nir_op_frcp, 1);
+		tmp->src[0] = ir2_src(ctx->so->f.inputs_count, 0, IR2_SRC_INPUT);
+
 		instr = instr_create_alu_dest(ctx, nir_op_fge, &intr->dest);
-		instr->src[0] = ir2_src(ctx->so->f.inputs_count, 0, IR2_SRC_INPUT);
+		instr->src[0] = ir2_src(tmp->idx, 0, IR2_SRC_SSA);
 		instr->src[1] = ir2_zero();
 		break;
 	default:
@@ -999,9 +996,7 @@ emit_if(struct ir2_context *ctx, nir_if * nif)
 	bool jumps;
 	unsigned pred = ctx->pred, pred_idx = ctx->pred_idx;
 
-	/* XXX nested predicates are not fully implemented, but optimizations
-	 * give us a form we can deal with easily
-	 */
+	/* XXX nested predicates are not fully implemented */
 	assert(!pred || pred == 3);
 
 	instr = ir2_instr_create(ctx, IR2_ALU);

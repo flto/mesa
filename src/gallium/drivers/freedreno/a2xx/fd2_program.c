@@ -279,7 +279,8 @@ fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	OUT_RING(ring, CP_REG(REG_A2XX_SQ_CONTEXT_MISC));
 	OUT_RING(ring, A2XX_SQ_CONTEXT_MISC_SC_SAMPLE_CNTL(CENTERS_ONLY) |
 		A2XX_SQ_CONTEXT_MISC_PARAM_GEN_POS(fp->f.inputs_count) |
-		COND(fp->f.fragcoord >= 0, A2XX_SQ_CONTEXT_MISC_SC_OUTPUT_SCREEN_XY));
+		/* we need SCREEN_XY for both fragcoord and frontfacing */
+		A2XX_SQ_CONTEXT_MISC_SC_OUTPUT_SCREEN_XY);
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_SQ_PROGRAM_CNTL));
