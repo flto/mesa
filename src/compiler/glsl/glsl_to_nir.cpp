@@ -1578,6 +1578,13 @@ nir_visitor::visit(ir_expression *ir)
    case ir_unop_u2i:
    case ir_unop_i642u64:
    case ir_unop_u642i64: {
+      if (!supports_ints) {
+         if (ir->operation == ir_unop_f2i || ir->operation == ir_unop_f2u) {
+            result = nir_ftrunc(&b, srcs[0]);
+            break;
+         }
+      }
+
       nir_alu_type src_type = nir_get_nir_type_for_glsl_base_type(types[0]);
       nir_alu_type dst_type = nir_get_nir_type_for_glsl_base_type(out_type);
       result = nir_build_alu(&b, nir_type_conversion_op(src_type, dst_type,
