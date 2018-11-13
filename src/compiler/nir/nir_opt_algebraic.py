@@ -133,6 +133,7 @@ optimizations = [
    (('~fadd@64', a, ('fmul',         c , ('fadd', b, ('fneg', a)))), ('flrp', a, b, c), '!options->lower_flrp64'),
    (('ffma', a, b, c), ('fadd', ('fmul', a, b), c), 'options->lower_ffma'),
    (('~fadd', ('fmul', a, b), c), ('ffma', a, b, c), 'options->fuse_ffma'),
+   (('~fadd', ('ffma', a, b, c), d), ('ffma', a, b, ('fadd', c, d)), 'options->fuse_ffma'),
 
    (('fdot4', ('vec4', a, b,   c,   1.0), d), ('fdph',  ('vec3', a, b, c), d)),
    (('fdot4', ('vec4', a, 0.0, 0.0, 0.0), b), ('fmul', a, b)),
