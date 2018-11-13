@@ -31,48 +31,44 @@
 
 #include "freedreno_context.h"
 
-#include "ir-a2xx.h"
+#include "ir2.h"
 #include "disasm.h"
 
-struct fd2_shader_stateobj {
-	enum shader_t type;
-
-	uint32_t *bin;
-
-	struct tgsi_token *tokens;
-
-	/* note that we defer compiling shader until we know both vs and ps..
-	 * and if one changes, we potentially need to recompile in order to
-	 * get varying linkages correct:
-	 */
-	struct ir2_shader_info info;
-	struct ir2_shader *ir;
-
-	/* for vertex shaders, the fetch instructions which need to be
-	 * patched up before assembly:
-	 */
-	unsigned num_vfetch_instrs;
-	struct ir2_instruction *vfetch_instrs[64];
-
-	/* for all shaders, any tex fetch instructions which need to be
-	 * patched before assembly:
-	 */
-	unsigned num_tfetch_instrs;
+struct fd2_fs_info {
+	unsigned inputs_count;
 	struct {
-		unsigned samp_id;
-		struct ir2_instruction *instr;
-	} tfetch_instrs[64];
+		uint8_t slot;
+		uint8_t ncomp;
+	} inputs[16];
+
+	/* driver_location of fragcoord.zw, -1 if not used */
+	int fragcoord;
+};
+
+struct fd2_shader_stateobj {
+	nir_shader *nir;
+	enum shader_t type;
+	bool is_a20x;
 
 	unsigned first_immediate;     /* const reg # of first immediate */
 	unsigned num_immediates;
 	struct {
 		uint32_t val[4];
+		unsigned ncomp;
 	} immediates[64];
+
+	bool writes_psize;
+	bool need_param;
+
+	struct fd2_fs_info f;
+	struct {
+		struct ir2_shader_info info;
+		struct fd2_fs_info f;
+	} variant[8];
 };
 
-void fd2_program_emit(struct fd_ringbuffer *ring,
+void fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 		struct fd_program_stateobj *prog);
-void fd2_program_validate(struct fd_context *ctx);
 
 void fd2_prog_init(struct pipe_context *pctx);
 
