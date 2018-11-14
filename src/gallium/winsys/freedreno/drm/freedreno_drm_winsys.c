@@ -104,7 +104,47 @@ fd_drm_screen_create(int fd)
 		if (!dev)
 			goto unlock;
 
-		pscreen = fd_screen_create(dev);
+		pscreen = fd_screen_create(dev, NULL);
+		if (pscreen) {
+			int fd = fd_device_fd(dev);
+
+			util_hash_table_set(fd_tab, intptr_to_pointer(fd), pscreen);
+
+			/* Bit of a hack, to avoid circular linkage dependency,
+			 * ie. pipe driver having to call in to winsys, we
+			 * override the pipe drivers screen->destroy():
+			 */
+			fd_screen(pscreen)->winsys_priv = pscreen->destroy;
+			pscreen->destroy = fd_drm_screen_destroy;
+		}
+	}
+
+unlock:
+	mtx_unlock(&fd_screen_mutex);
+	return pscreen;
+}
+
+struct pipe_screen *
+fd_drm_screen_create_renderonly(struct renderonly *ro)
+{
+	struct pipe_screen *pscreen = NULL;
+
+	mtx_lock(&fd_screen_mutex);
+	if (!fd_tab) {
+		fd_tab = util_hash_table_create(hash_fd, compare_fd);
+		if (!fd_tab)
+			goto unlock;
+	}
+
+	pscreen = util_hash_table_get(fd_tab, intptr_to_pointer(ro->gpu_fd));
+	if (pscreen) {
+		fd_screen(pscreen)->refcnt++;
+	} else {
+		struct fd_device *dev = fd_device_new_dup(ro->gpu_fd);
+		if (!dev)
+			goto unlock;
+
+		pscreen = fd_screen_create(dev, ro);
 		if (pscreen) {
 			int fd = fd_device_fd(dev);
 
