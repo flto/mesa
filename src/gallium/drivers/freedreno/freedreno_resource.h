@@ -63,6 +63,7 @@ struct set;
 
 struct fd_resource {
 	struct pipe_resource base;
+	struct renderonly_scanout *scanout;
 	struct fd_bo *bo;
 	uint32_t cpp;
 	enum pipe_format internal_format;

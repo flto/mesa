@@ -642,27 +642,6 @@ fd_get_compiler_options(struct pipe_screen *pscreen,
 	return ir2_get_compiler_options();
 }
 
-boolean
-fd_screen_bo_get_handle(struct pipe_screen *pscreen,
-		struct fd_bo *bo,
-		unsigned stride,
-		struct winsys_handle *whandle)
-{
-	whandle->stride = stride;
-
-	if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
-		return fd_bo_get_name(bo, &whandle->handle) == 0;
-	} else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
-		whandle->handle = fd_bo_handle(bo);
-		return TRUE;
-	} else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
-		whandle->handle = fd_bo_dmabuf(bo);
-		return TRUE;
-	} else {
-		return FALSE;
-	}
-}
-
 struct fd_bo *
 fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 		struct winsys_handle *whandle)
@@ -690,7 +669,7 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 }
 
 struct pipe_screen *
-fd_screen_create(struct fd_device *dev)
+fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 {
 	struct fd_screen *screen = CALLOC_STRUCT(fd_screen);
 	struct pipe_screen *pscreen;
@@ -711,6 +690,14 @@ fd_screen_create(struct fd_device *dev)
 
 	screen->dev = dev;
 	screen->refcnt = 1;
+
+	if (ro) {
+		screen->ro = renderonly_dup(ro);
+		if (!screen->ro) {
+			DBG("could not create renderonly object");
+			goto fail;
+		}
+	}
 
 	// maybe this should be in context?
 	screen->pipe = fd_pipe_new(screen->dev, FD_PIPE_3D);
