@@ -924,6 +924,11 @@ void st_init_extensions(struct pipe_screen *screen,
         { PIPE_FORMAT_X24S8_UINT,
           PIPE_FORMAT_S8X24_UINT },
         GL_TRUE }, /* at least one format must be supported */
+
+      { { o(AMD_compressed_ATC_texture) },
+        { PIPE_FORMAT_ATC_RGB,
+          PIPE_FORMAT_ATC_RGBA,
+          PIPE_FORMAT_ATC_RGBA_INTERP }, },
    };
 
    /* Required: vertex fetch support. */

@@ -602,6 +602,13 @@ st_mesa_format_to_pipe_format(const struct st_context *st,
          return PIPE_FORMAT_R8G8B8A8_SRGB;
       return PIPE_FORMAT_ASTC_12x12_SRGB;
 
+   case MESA_FORMAT_ATC_RGB:
+      return PIPE_FORMAT_ATC_RGB;
+   case MESA_FORMAT_ATC_RGBA:
+      return PIPE_FORMAT_ATC_RGBA;
+   case MESA_FORMAT_ATC_RGBA_INTERP:
+      return PIPE_FORMAT_ATC_RGBA_INTERP;
+
    default:
       return PIPE_FORMAT_NONE;
    }
@@ -1087,6 +1094,13 @@ st_pipe_format_to_mesa_format(enum pipe_format format)
       return MESA_FORMAT_SRGB8_ALPHA8_ASTC_12x10;
    case PIPE_FORMAT_ASTC_12x12_SRGB:
       return MESA_FORMAT_SRGB8_ALPHA8_ASTC_12x12;
+
+   case PIPE_FORMAT_ATC_RGB:
+      return MESA_FORMAT_ATC_RGB;
+   case PIPE_FORMAT_ATC_RGBA:
+      return MESA_FORMAT_ATC_RGBA;
+   case PIPE_FORMAT_ATC_RGBA_INTERP:
+      return MESA_FORMAT_ATC_RGBA_INTERP;
 
    default:
       return MESA_FORMAT_NONE;
@@ -1750,6 +1764,20 @@ static const struct format_mapping format_map[] = {
    {
       { GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR, 0 },
       { PIPE_FORMAT_ASTC_12x12_SRGB, 0},
+   },
+
+   /* ATC */
+   {
+      { GL_ATC_RGB_AMD, 0 },
+      { PIPE_FORMAT_ETC1_RGB8, 0 }
+   },
+   {
+      { GL_ATC_RGBA_EXPLICIT_ALPHA_AMD, 0 },
+      { PIPE_FORMAT_ATC_RGBA, 0 }
+   },
+   {
+      { GL_ATC_RGBA_INTERPOLATED_ALPHA_AMD, 0 },
+      { PIPE_FORMAT_ATC_RGBA_INTERP, 0 }
    },
 
    /* signed/unsigned integer formats.

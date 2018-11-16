@@ -23,6 +23,7 @@ EXT(AMD_shader_trinary_minmax               , dummy_true                        
 EXT(AMD_texture_texture4                    , ARB_texture_gather                     , GLL, GLC,  x ,  x , 2008)
 EXT(AMD_vertex_shader_layer                 , AMD_vertex_shader_layer                , GLL, GLC,  x ,  x , 2012)
 EXT(AMD_vertex_shader_viewport_index        , AMD_vertex_shader_viewport_index       , GLL, GLC,  x ,  x , 2012)
+EXT(AMD_compressed_ATC_texture              , dummy_true                             , GLL, GLC, ES1, ES2, 2008)
 
 EXT(ANDROID_extension_pack_es31a            , ANDROID_extension_pack_es31a           ,  x ,  x ,  x ,  31, 2014)
 

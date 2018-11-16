@@ -398,6 +398,10 @@ enum pipe_format {
 
    PIPE_FORMAT_R8_SRGB                 = 312,
 
+   PIPE_FORMAT_ATC_RGB                 = 313,
+   PIPE_FORMAT_ATC_RGBA                = 314,
+   PIPE_FORMAT_ATC_RGBA_INTERP         = 315,
+
    PIPE_FORMAT_COUNT
 };
 
