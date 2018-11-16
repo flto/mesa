@@ -1142,6 +1142,9 @@ _mesa_is_color_format(GLenum format)
       case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR:
       case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR:
       case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR:
+      case GL_ATC_RGB_AMD:
+      case GL_ATC_RGBA_EXPLICIT_ALPHA_AMD:
+      case GL_ATC_RGBA_INTERPOLATED_ALPHA_AMD:
       /* generic integer formats */
       case GL_RED_INTEGER_EXT:
       case GL_GREEN_INTEGER_EXT:
@@ -1401,6 +1404,8 @@ _mesa_is_compressed_format(const struct gl_context *ctx, GLenum format)
          ctx->Extensions.ARB_texture_compression_bptc;
    case MESA_FORMAT_LAYOUT_ASTC:
       return ctx->Extensions.KHR_texture_compression_astc_ldr;
+   case MESA_FORMAT_LAYOUT_ATC:
+      return ctx->Extensions.AMD_compressed_ATC_texture;
    default:
       return GL_FALSE;
    }

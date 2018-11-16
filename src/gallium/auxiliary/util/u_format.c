@@ -546,6 +546,9 @@ util_format_fits_8unorm(const struct util_format_description *format_desc)
          return TRUE;
       return FALSE;
 
+   case UTIL_FORMAT_LAYOUT_ATC:
+      return TRUE;
+
    case UTIL_FORMAT_LAYOUT_PLAIN:
       /*
        * For these we can find a generic rule.

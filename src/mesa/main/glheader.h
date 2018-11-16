@@ -146,6 +146,12 @@ typedef void *GLeglImageOES;
 #define GL_ETC1_RGB8_OES                                        0x8D64
 #endif
 
+#ifndef GL_AMD_compressed_ATC_texture
+#define GL_ATC_RGB_AMD                    0x8C92
+#define GL_ATC_RGBA_EXPLICIT_ALPHA_AMD    0x8C93
+#define GL_ATC_RGBA_INTERPOLATED_ALPHA_AMD 0x87EE
+#endif
+
 #ifndef GL_EXT_shader_framebuffer_fetch
 #define GL_FRAGMENT_SHADER_DISCARDS_SAMPLES_EXT                 0x8A52
 #endif
