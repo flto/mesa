@@ -160,6 +160,54 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_CLIP_CNTL));
 	OUT_RING(ring, 0x00000000);
 
+	if ((fd_mesa_debug & FD_DBG_TILE) && batch->resolve) {
+		static int color;
+		static struct fd_gmem_stateobj gmem_prev;
+
+		color += !!memcmp(&gmem_prev, gmem, sizeof(gmem_prev));
+		color &= 63;
+		gmem_prev = *gmem;
+
+		OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+		OUT_RING(ring, 0x00000480);
+
+		for (int i = 0; i < 3; i++) {
+			int j = (color >> i & 1) | (color >> (i+3) & 1) * 2;
+			OUT_RING(ring, fui(0.25f * (j + 1)));
+		}
+
+		OUT_RING(ring, fui(1.0f));
+
+		OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+		OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VPORT_XSCALE));
+		OUT_RING(ring, fui((float)(tile->bin_w-1)));  /* PA_CL_VPORT_XSCALE */
+		OUT_RING(ring, fui(0.5));  /* PA_CL_VPORT_XOFFSET */
+		OUT_RING(ring, fui((float)(tile->bin_h-1))); /* PA_CL_VPORT_YSCALE */
+		OUT_RING(ring, fui(0.5));  /* PA_CL_VPORT_YOFFSET */
+
+		fd2_emit_vertex_bufs(ring, 0x9c, (struct fd2_vertex_buf[]) {
+			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 12*5, .offset = 0x90 },
+		}, 1);
+
+		OUT_WFI(ring);
+
+		fd_draw(batch, ring, DI_PT_LINESTRIP, IGNORE_VISIBILITY,
+				DI_SRC_SEL_AUTO_INDEX, 5, 0, INDEX_SIZE_IGN, 0, 0, NULL);
+
+		OUT_WFI(ring);
+
+		fd2_emit_vertex_bufs(ring, 0x9c, (struct fd2_vertex_buf[]) {
+			{ .prsc = fd2_ctx->solid_vertexbuf, .size = 48 },
+		}, 1);
+	}
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VPORT_XSCALE));
+	OUT_RING(ring, fui((float)(tile->bin_w)));  /* PA_CL_VPORT_XSCALE */
+	OUT_RING(ring, fui(0.0));  /* PA_CL_VPORT_XOFFSET */
+	OUT_RING(ring, fui((float)(tile->bin_h))); /* PA_CL_VPORT_YSCALE */
+	OUT_RING(ring, fui(0.0));  /* PA_CL_VPORT_YOFFSET */
+
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_MODECONTROL));
 	OUT_RING(ring, A2XX_RB_MODECONTROL_EDRAM_MODE(EDRAM_COPY));
