@@ -88,6 +88,11 @@ fd_draw(struct fd_batch *batch, struct fd_ringbuffer *ring,
 		if (idx_buffer)
 			size += 2;
 
+		if (vismode) {
+			util_dynarray_append(&batch->draw_patches, struct fd_cs_patch,
+				(struct fd_cs_patch) { .cs  = ring->cur });
+		}
+
 		OUT_PKT3(ring, vismode ? CP_DRAW_INDX_BIN : CP_DRAW_INDX, size);
 		OUT_RING(ring, 0x00000000);
 		OUT_RING(ring, DRAW_A20X(primtype, DI_FACE_CULL_NONE, src_sel,
