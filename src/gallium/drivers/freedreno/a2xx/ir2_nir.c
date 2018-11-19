@@ -1112,6 +1112,9 @@ ir2_nir_compile(struct ir2_context *ctx, unsigned variant)
 	/* postprocess */
 	OPT_V(ctx->nir, nir_opt_algebraic_late);
 
+	/* lower to scalar instructions that can only be scalar on a2xx */
+	OPT_V(ctx->nir, ir2_nir_lower_scalar);
+
 	OPT_V(ctx->nir, nir_lower_to_source_mods);
 	OPT_V(ctx->nir, nir_copy_prop);
 	OPT_V(ctx->nir, nir_opt_dce);
