@@ -170,6 +170,7 @@ calculate_tiles(struct fd_batch *batch)
 		miny = rsc_fb->damage.miny;
 		width = MIN2(rsc_fb->damage.maxx - minx, pfb->width);
 		height = MIN2(rsc_fb->damage.maxy - miny, pfb->height);
+		rsc_fb->damage.has_damage = false;
 	}
 
 	bin_w = align(width, gmem_alignw);
@@ -338,12 +339,15 @@ calculate_tiles(struct fd_batch *batch)
 #endif
 }
 
+int tilecount, pixelcount;
+bool is_hud_batch;
+
 static void
 render_tiles(struct fd_batch *batch)
 {
 	struct fd_context *ctx = batch->ctx;
 	struct fd_gmem_stateobj *gmem = &ctx->gmem;
-	int i;
+	int i, npixel = 0;
 
 	ctx->emit_tile_init(batch);
 
@@ -373,6 +377,13 @@ render_tiles(struct fd_batch *batch)
 
 		/* emit gmem2mem to transfer tile back to system memory: */
 		ctx->emit_tile_gmem2mem(batch, tile);
+
+		npixel += tile->bin_w * tile->bin_h;
+	}
+
+	if (batch->resolve && !is_hud_batch) {
+		tilecount = gmem->nbins_x * gmem->nbins_y;
+		pixelcount = npixel;
 	}
 
 	if (ctx->emit_tile_fini)

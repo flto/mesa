@@ -157,7 +157,7 @@ hud_draw_string(struct hud_context *hud, unsigned x, unsigned y,
 
    hud_draw_background_quad(hud,
                             x, y,
-                            x + strlen(buf)*hud->font.glyph_width,
+                            x + (strlen(buf)+1)*hud->font.glyph_width,
                             y + hud->font.glyph_height);
 
    while (*s) {
@@ -451,6 +451,8 @@ hud_prepare_vertices(struct hud_context *hud, struct vertex_queue *v,
    v->buffer_size = stride * num_vertices;
 }
 
+extern bool is_hud_batch;
+
 /**
  * Draw the HUD to the texture \p tex.
  * The texture is usually the back buffer being displayed.
@@ -574,10 +576,12 @@ hud_draw_results(struct hud_context *hud, struct pipe_resource *tex)
    pipe_resource_reference(&hud->text.vbuf.buffer.resource, NULL);
 
    if (hud->simple) {
+is_hud_batch = true;
       cso_restore_state(cso);
       cso_restore_constant_buffer_slot0(cso, PIPE_SHADER_VERTEX);
 
       pipe_surface_reference(&surf, NULL);
+is_hud_batch = false;
       return;
    }
 
@@ -1251,6 +1255,12 @@ hud_parse_env_var(struct hud_context *hud, struct pipe_screen *screen,
       }
       else if (strcmp(name, "frametime") == 0) {
          hud_frametime_graph_install(pane);
+      }
+      else if (strcmp(name, "tilecount") == 0) {
+         hud_tilecount_graph_install(pane);
+      }
+      else if (strcmp(name, "pixelcount") == 0) {
+         hud_pixelcount_graph_install(pane);
       }
       else if (strcmp(name, "cpu") == 0) {
          hud_cpu_graph_install(pane, ALL_CPUS);
