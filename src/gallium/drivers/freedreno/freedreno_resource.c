@@ -1271,6 +1271,28 @@ fd_resource_create_modifiers(struct pipe_screen *pscreen,
 
    return prsc;
 }
+
+static bool
+fd_check_resource_capability(struct pipe_screen *pscreen,
+                               struct pipe_resource *prsc,
+                               unsigned bind)
+{
+   struct fd_screen *screen = fd_screen(pscreen);
+   struct fd_resource *rsc = fd_resource(prsc);
+
+   if ((bind & PIPE_BIND_LINEAR) && rsc->tile_mode)
+      return false;
+
+   if ((bind & PIPE_BIND_SCANOUT) && !rsc->scanout) {
+      rsc->scanout = renderonly_create_gpu_import_for_resource(prsc, screen->ro,
+                                                               NULL);
+      if (!rsc->scanout)
+         return false;
+   }
+
+   return true;
+}
+
 void
 fd_resource_screen_init(struct pipe_screen *pscreen)
 {
@@ -1282,6 +1304,7 @@ fd_resource_screen_init(struct pipe_screen *pscreen)
 	pscreen->resource_from_handle = fd_resource_from_handle;
 	pscreen->resource_get_handle = fd_resource_get_handle;
 	pscreen->resource_destroy = u_transfer_helper_resource_destroy;
+	pscreen->check_resource_capability = fd_check_resource_capability;
 
 	pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
 			true, false, fake_rgtc, true);
