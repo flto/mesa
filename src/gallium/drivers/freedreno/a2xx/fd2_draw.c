@@ -242,7 +242,7 @@ clear_state(struct fd_batch *batch, struct fd_ringbuffer *ring,
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
-	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000002);
 
 	fd2_program_emit(batch, ring, &batch->ctx->solid_prog);
 

@@ -435,7 +435,7 @@ fd2_emit_restore(struct fd_context *ctx, struct fd_ringbuffer *ring)
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_VERTEX_REUSE_BLOCK_CNTL));
-	OUT_RING(ring, 0x0000003b);
+	OUT_RING(ring, 0x00000002);
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_SQ_CONTEXT_MISC));
@@ -469,6 +469,10 @@ fd2_emit_restore(struct fd_context *ctx, struct fd_ringbuffer *ring)
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_DEST_MASK));
 	OUT_RING(ring, 0xffffffff);
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_VGT_OUT_DEALLOC_CNTL));
+	OUT_RING(ring, 0x00000002);
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COPY_DEST_INFO));
