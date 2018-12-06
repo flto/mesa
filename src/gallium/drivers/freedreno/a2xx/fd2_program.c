@@ -81,7 +81,7 @@ emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	OUT_RING(ring, info->sizedwords);
 	for (i = 0; i < info->sizedwords; i++) {
 		if (a20x_binning && i == info->export32_offset)
-			OUT_RINGP(ring, info->dwords[i], &batch->draw_patches);
+			OUT_RINGP(ring, info->dwords[i], &batch->shader_patches);
 		else
 			OUT_RING(ring, info->dwords[i]);
 	}

@@ -441,6 +441,9 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 			sysmem = true;
 		}
 
+		if (fd_mesa_debug & FD_DBG_BYPASS)
+			sysmem = true;
+
 		/* For ARB_framebuffer_no_attachments: */
 		if ((pfb->nr_cbufs == 0) && !pfb->zsbuf) {
 			sysmem = true;

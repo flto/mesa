@@ -314,7 +314,8 @@ fd2_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_ZSA)) {
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_RB_COLORCONTROL));
-		OUT_RING(ring, zsa->rb_colorcontrol | blend->rb_colorcontrol);
+		OUT_RING(ring, zsa->rb_colorcontrol | blend->rb_colorcontrol |
+			COND(fd_mesa_debug & FD_DBG_BYPASS, A2XX_RB_COLORCONTROL_BLEND_DISABLE));
 	}
 
 	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_FRAMEBUFFER)) {

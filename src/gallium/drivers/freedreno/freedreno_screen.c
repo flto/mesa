@@ -89,6 +89,7 @@ static const struct debug_named_value debug_options[] = {
 		{"tex1x1",    FD_DBG_TEX1,  "Use 1x1 textures for debugging"},
 		{"fragsolid", FD_DBG_FRAGS,  "Use solid color fragment shaders for debugging"},
 		{"tile",      FD_DBG_TILE,  "render tile outlines"},
+		{"bypass",    FD_DBG_BYPASS,  "always use GMEM bypass"},
 		DEBUG_NAMED_VALUE_END
 };
 

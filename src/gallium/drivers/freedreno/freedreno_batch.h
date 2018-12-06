@@ -149,6 +149,9 @@ struct fd_batch {
 	 */
 	struct util_dynarray rbrc_patches;
 
+	struct util_dynarray shader_patches;
+	struct util_dynarray gmem_patches;
+
 	struct pipe_framebuffer_state framebuffer;
 
 	/** draw pass cmdstream: */

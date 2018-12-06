@@ -402,6 +402,101 @@ fd2_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 			A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
 }
 
+static void
+patch_draws(struct fd_batch *batch, enum pc_di_vis_cull_mode vismode)
+{
+	unsigned i;
+
+	if (vismode == USE_VISIBILITY) {
+		util_dynarray_resize(&batch->draw_patches, 0);
+		return;
+	}
+
+	/* CP_DRAW_INDX_BIN -> CP_DRAW_INDX */
+
+	for (i = 0; i < fd_patch_num_elements(&batch->draw_patches); i++) {
+		struct fd_cs_patch *patch = fd_patch_element(&batch->draw_patches, i);
+		unsigned cnt = patch->cs[0] >> 16 & 0xfff;
+
+		patch->cs[0] = CP_TYPE3_PKT | ((cnt-2) << 16) | (CP_DRAW_INDX << 8);
+		patch->cs[2] &= ~(1 << 14 | 1 << 15); /* remove cull_enable bits */
+		if (cnt == 5) {
+			/* move idx_buffer up */
+			patch->cs[3] = patch->cs[5];
+			patch->cs[4] = patch->cs[6];
+		}
+		/* pad with NOP */
+		patch->cs[cnt] = CP_TYPE3_PKT | (CP_NOP << 8);
+		patch->cs[cnt+1] = 0x00000000;
+	}
+	util_dynarray_resize(&batch->draw_patches, 0);
+}
+
+static void
+fd2_emit_sysmem_prep(struct fd_batch *batch)
+{
+	struct fd_context *ctx = batch->ctx;
+	struct fd_ringbuffer *ring = batch->gmem;
+	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
+	struct pipe_surface *psurf = pfb->cbufs[0];
+
+	if (!psurf)
+		return;
+
+	struct fd_resource *rsc = fd_resource(psurf->texture);
+	struct fd_resource_slice *slice =
+		fd_resource_slice(rsc, psurf->u.tex.level);
+	uint32_t offset =
+		fd_resource_offset(rsc, psurf->u.tex.level, psurf->u.tex.first_layer);
+
+	assert((slice->pitch & 31) == 0);
+	assert((offset & 0xfff) == 0);
+
+	fd2_emit_restore(ctx, ring);
+
+	OUT_PKT0(ring, REG_A2XX_COHER_SIZE_PM4, 1);
+	OUT_RING(ring, slice->size0);
+	OUT_PKT0(ring, REG_A2XX_COHER_STATUS_PM4, 1);
+	OUT_RING(ring, 0x02000200);
+	OUT_PKT0(ring, REG_A2XX_COHER_BASE_PM4, 1);
+	OUT_RELOCW(ring, rsc->bo, offset, 0, 0);
+
+	OUT_PKT3(ring, CP_WAIT_REG_EQ, 4);
+	OUT_RING(ring, REG_A2XX_COHER_STATUS_PM4);
+	OUT_RING(ring, 0);
+	OUT_RING(ring, 0x80000000);
+	OUT_RING(ring, 1);
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_RB_SURFACE_INFO));
+	OUT_RING(ring, A2XX_RB_SURFACE_INFO_SURFACE_PITCH(slice->pitch));
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_RB_COLOR_INFO));
+	OUT_RELOCW(ring, rsc->bo, offset, A2XX_RB_COLOR_INFO_LINEAR |
+		A2XX_RB_COLOR_INFO_SWAP(fmt2swap(psurf->format)) |
+		A2XX_RB_COLOR_INFO_FORMAT(fd2_pipe2color(psurf->format)), 0);
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_COHER_DEST_BASE_0));
+	OUT_RELOCW(ring, rsc->bo, offset, 0, 0);
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 3);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_SCREEN_SCISSOR_TL));
+	OUT_RING(ring, A2XX_PA_SC_SCREEN_SCISSOR_TL_WINDOW_OFFSET_DISABLE);
+	OUT_RING(ring, A2XX_PA_SC_SCREEN_SCISSOR_BR_X(pfb->width) |
+		A2XX_PA_SC_SCREEN_SCISSOR_BR_Y(pfb->height));
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_SC_WINDOW_OFFSET));
+	OUT_RING(ring, A2XX_PA_SC_WINDOW_OFFSET_X(0) |
+			A2XX_PA_SC_WINDOW_OFFSET_Y(0));
+
+	patch_draws(batch, IGNORE_VISIBILITY);
+	util_dynarray_resize(&batch->shader_patches, 0);
+}
+
+
 /* before first tile */
 static void
 fd2_emit_tile_init(struct fd_batch *batch)
@@ -431,8 +526,8 @@ fd2_emit_tile_init(struct fd_batch *batch)
 	if (is_a20x(ctx->screen) && !(fd_mesa_debug & FD_DBG_NOBIN) &&
 		gmem->num_vsc_pipes) {
 		/* patch out unneeded memory exports by setting EXEC_END cf */
-		for (i = 0; i < fd_patch_num_elements(&batch->draw_patches); i++) {
-			struct fd_cs_patch *patch = fd_patch_element(&batch->draw_patches, i);
+		for (i = 0; i < fd_patch_num_elements(&batch->shader_patches); i++) {
+			struct fd_cs_patch *patch = fd_patch_element(&batch->shader_patches, i);
 			*patch->cs = patch->val;
 
 			instr_cf_t *cf = (instr_cf_t*) patch->cs;
@@ -442,6 +537,8 @@ fd2_emit_tile_init(struct fd_batch *batch)
 			assert(cf[ctx->screen->num_vsc_pipes*2-2].opc == EXEC_END);
 			cf[2*(gmem->num_vsc_pipes-1)].opc = EXEC_END;
 		}
+
+		patch_draws(batch, USE_VISIBILITY);
 
 		/* initialize shader constants for the binning memexport */
 		OUT_PKT3(ring, CP_SET_CONSTANT, 1 + gmem->num_vsc_pipes * 4);
@@ -509,9 +606,11 @@ fd2_emit_tile_init(struct fd_batch *batch)
 		OUT_RING(ring, 0);
 
 		ctx->emit_ib(ring, batch->binning);
+	} else {
+		patch_draws(batch, IGNORE_VISIBILITY);
 	}
 
-	util_dynarray_resize(&batch->draw_patches, 0);
+	util_dynarray_resize(&batch->shader_patches, 0);
 }
 
 /* before mem2gmem */
@@ -611,6 +710,7 @@ fd2_gmem_init(struct pipe_context *pctx)
 {
 	struct fd_context *ctx = fd_context(pctx);
 
+	ctx->emit_sysmem_prep = fd2_emit_sysmem_prep;
 	ctx->emit_tile_init = fd2_emit_tile_init;
 	ctx->emit_tile_prep = fd2_emit_tile_prep;
 	ctx->emit_tile_mem2gmem = fd2_emit_tile_mem2gmem;

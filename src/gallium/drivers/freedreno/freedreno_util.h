@@ -88,6 +88,7 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 #define FD_DBG_TEX1   0x800000
 #define FD_DBG_FRAGS 0x1000000
 #define FD_DBG_TILE  0x2000000
+#define FD_DBG_BYPASS 0x4000000
 
 extern int fd_mesa_debug;
 extern bool fd_binning_enabled;

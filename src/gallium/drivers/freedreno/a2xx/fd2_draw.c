@@ -497,8 +497,8 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 	struct fd_ringbuffer *ring = ctx->batch->draw;
 	struct pipe_framebuffer_state *fb = &ctx->batch->framebuffer;
 
-	/* use fast clear path for fullscreen clear */
-	if (true) {
+	/* use fast clear path for clear */
+	if (!((fd_mesa_debug & FD_DBG_BYPASS))) {
         ctx->batch->fast_clear.buffers |= buffers;
         if (buffers & PIPE_CLEAR_COLOR)
 			 ctx->batch->fast_clear.color = *color;
