@@ -216,7 +216,7 @@ fill_instr(struct ir2_context *ctx, struct ir2_sched_instr *sched,
 			tex->arbitrary_filter = ARBITRARY_FILTER_USE_FETCH_CONST;
 			tex->vol_mag_filter = TEX_FILTER_USE_FETCH_CONST;
 			tex->vol_min_filter = TEX_FILTER_USE_FETCH_CONST;
-			tex->use_comp_lod = ctx->so->type == SHADER_FRAGMENT;
+			tex->use_comp_lod = ctx->so->type == MESA_SHADER_FRAGMENT;
 			tex->use_reg_lod = instr->src_count == 2;
 			tex->sample_location = SAMPLE_CENTER;
 			tex->tx_coord_denorm = instr->fetch.tex.is_rect;
@@ -373,7 +373,7 @@ void assemble(struct ir2_context *ctx)
 	ctx->info->export32_offset = -1;
 	ctx->info->num_fetch_instrs = 0;
 
-	if ((ctx->so->type == SHADER_VERTEX && ctx->so->f.inputs_count == 0) ||
+	if ((ctx->so->type == MESA_SHADER_VERTEX && ctx->so->f.inputs_count == 0) ||
 		ctx->info == &ctx->so->info[1]) { /* hack to check binning variant */
 		alloc.buffer_select = SQ_PARAMETER_PIXEL;
 		cfs[num_cf++].alloc = alloc;
@@ -479,7 +479,7 @@ void assemble(struct ir2_context *ctx)
 			alloc.size = 0;
 			alloc.buffer_select = buffer;
 
-			if (buffer == SQ_PARAMETER_PIXEL && ctx->so->type == SHADER_VERTEX)
+			if (buffer == SQ_PARAMETER_PIXEL && ctx->so->type == MESA_SHADER_VERTEX)
 				alloc.size = ctx->so->f.inputs_count - 1;
 
 			if (buffer == SQ_POSITION)

@@ -77,7 +77,7 @@ emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	assert(info->sizedwords);
 
 	OUT_PKT3(ring, CP_IM_LOAD_IMMEDIATE, 2 + info->sizedwords);
-	OUT_RING(ring, (so->type == SHADER_VERTEX) ? 0 : 1);
+	OUT_RING(ring, (so->type == MESA_SHADER_VERTEX) ? 0 : 1);
 	OUT_RING(ring, info->sizedwords);
 	for (i = 0; i < info->sizedwords; i++) {
 		if (a20x_binning && i == info->export32_offset)
@@ -97,7 +97,7 @@ static void *
 fd2_fp_state_create(struct pipe_context *pctx,
 		const struct pipe_shader_state *cso)
 {
-	struct fd2_shader_stateobj *so = create_shader(pctx, SHADER_FRAGMENT);
+	struct fd2_shader_stateobj *so = create_shader(pctx, MESA_SHADER_FRAGMENT);
 	if (!so)
 		return NULL;
 
@@ -127,29 +127,10 @@ fail:
 }
 
 static void
-emit(struct fd_ringbuffer *ring, struct fd2_shader_stateobj *so)
+fd2_fp_state_delete(struct pipe_context *pctx, void *hwcso)
 {
-	unsigned i;
-
-	if (so->info.sizedwords == 0)
-		assemble(so);
-
-	OUT_PKT3(ring, CP_IM_LOAD_IMMEDIATE, 2 + so->info.sizedwords);
-	OUT_RING(ring, (so->type == MESA_SHADER_VERTEX) ? 0 : 1);
-	OUT_RING(ring, so->info.sizedwords);
-	for (i = 0; i < so->info.sizedwords; i++)
-		OUT_RING(ring, so->bin[i]);
-}
-
-static void *
-fd2_fp_state_create(struct pipe_context *pctx,
-		const struct pipe_shader_state *cso)
-{
-	struct fd2_shader_stateobj *so = create_shader(MESA_SHADER_FRAGMENT);
-	if (!so)
-		return NULL;
-	so->tokens = tgsi_dup_tokens(cso->tokens);
-	return so;
+	struct fd2_shader_stateobj *so = hwcso;
+	delete_shader(so);
 }
 
 static void *

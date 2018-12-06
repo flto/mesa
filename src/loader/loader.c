@@ -130,22 +130,29 @@ loader_open_render_node(const char *name)
       goto free;
    }
 
+   printf("NUM=%u\n", num);
+
    for (i = 0; i < num; i++) {
       device = devices[i];
+      printf("device->available_nodes=%u %u %s\n", device->available_nodes, device->bustype, device->nodes[DRM_NODE_PRIMARY]);
 
-      if ((device->available_nodes & (1 << DRM_NODE_RENDER)) &&
+      if ((device->available_nodes & (1 << DRM_NODE_PRIMARY)) &&
           (device->bustype == DRM_BUS_PLATFORM)) {
          drmVersionPtr version;
 
-         fd = open(device->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+         fd = open(device->nodes[DRM_NODE_PRIMARY], O_RDWR | O_CLOEXEC);
+         printf("fd=%i\n", fd);
          if (fd < 0)
             continue;
 
          version = drmGetVersion(fd);
+         printf("version=%p\n", version);
          if (!version) {
             close(fd);
             continue;
          }
+
+         printf("name=%s\n", version->name);
 
          if (strcmp(version->name, name) != 0) {
             drmFreeVersion(version);

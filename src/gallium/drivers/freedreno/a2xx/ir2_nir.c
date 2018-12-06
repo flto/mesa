@@ -289,7 +289,7 @@ instr_create_alu(struct ir2_context *ctx, nir_op opcode, unsigned ncomp)
 		[nir_op_fmov] = {MAXs, MAXv},
 		[nir_op_fsign] = {-1, CNDGTEv},
 		[nir_op_fnot] = {SETEs, SETEv},
-		[nir_op_f2b] = {SETNEs, SETNEv},
+		//[nir_op_f2b] = {SETNEs, SETNEv}, ??
 		[nir_op_for] = {MAXs, MAXv},
 		[nir_op_fand] = {MINs, MINv},
 		[nir_op_fxor] = {-1, SETNEv},
@@ -529,7 +529,7 @@ load_input(struct ir2_context *ctx, nir_dest *dst, unsigned slot)
 {
 	struct ir2_instr *instr;
 
-	if (ctx->so->type == SHADER_VERTEX) {
+	if (ctx->so->type == MESA_SHADER_VERTEX) {
 		assert(slot >= VERT_ATTRIB_GENERIC0 && slot <= VERT_ATTRIB_GENERIC15);
 		slot -= VERT_ATTRIB_GENERIC0;
 		instr = ir2_instr_create_fetch(ctx, dst, 0);
@@ -585,7 +585,7 @@ store_output(struct ir2_context *ctx, nir_src src, unsigned slot, unsigned ncomp
 	struct ir2_instr *instr;
 	unsigned idx = ~0u;
 
-	if (ctx->so->type == SHADER_VERTEX) {
+	if (ctx->so->type == MESA_SHADER_VERTEX) {
 		if (slot == VARYING_SLOT_POS) {
 			ctx->position = make_src(ctx, src);
 			idx = 62;
@@ -784,10 +784,10 @@ setup_input(struct ir2_context *ctx, nir_variable * in)
 	assert(array_len == 1);
 
 	/* handle later */
-	if (ctx->so->type == SHADER_VERTEX)
+	if (ctx->so->type == MESA_SHADER_VERTEX)
 		return;
 
-	if (ctx->so->type != SHADER_FRAGMENT)
+	if (ctx->so->type != MESA_SHADER_FRAGMENT)
 		compile_error(ctx, "unknown shader type: %d\n", ctx->so->type);
 
 	if (slot == VARYING_SLOT_PNTC) {
@@ -1067,7 +1067,7 @@ variant_opt(struct ir2_context *ctx, unsigned variant)
 	if (!variant)
 		return;
 
-	assert(ctx->so->type == SHADER_VERTEX);
+	assert(ctx->so->type == MESA_SHADER_VERTEX);
 
 	/* kill non-position outputs for binning variant */
 	nir_foreach_block(block, nir_shader_get_entrypoint(ctx->nir)) {
@@ -1115,7 +1115,7 @@ ir2_nir_compile(struct ir2_context *ctx, unsigned variant)
 	/* lower to scalar instructions that can only be scalar on a2xx */
 	OPT_V(ctx->nir, ir2_nir_lower_scalar);
 
-	OPT_V(ctx->nir, nir_lower_to_source_mods);
+	OPT_V(ctx->nir, nir_lower_to_source_mods, nir_lower_all_source_mods);
 	OPT_V(ctx->nir, nir_copy_prop);
 	OPT_V(ctx->nir, nir_opt_dce);
 	OPT_V(ctx->nir, nir_opt_move_comparisons);
@@ -1138,7 +1138,7 @@ ir2_nir_compile(struct ir2_context *ctx, unsigned variant)
 	}
 
 	/* fd2_shader_stateobj init */
-	if (so->type == SHADER_FRAGMENT) {
+	if (so->type == MESA_SHADER_FRAGMENT) {
 		so->f.fragcoord = -1;
 		so->f.inputs_count = 0;
 		memset(so->f.inputs, 0, sizeof(so->f.inputs));
@@ -1148,7 +1148,7 @@ ir2_nir_compile(struct ir2_context *ctx, unsigned variant)
 	nir_foreach_variable(in, &ctx->nir->inputs)
 		setup_input(ctx, in);
 
-	if (so->type == SHADER_FRAGMENT) {
+	if (so->type == MESA_SHADER_FRAGMENT) {
 		unsigned idx;
 		for (idx = 0; idx < so->f.inputs_count; idx++) {
 			ctx->input[idx].ncomp = so->f.inputs[idx].ncomp;
@@ -1176,12 +1176,12 @@ ir2_nir_compile(struct ir2_context *ctx, unsigned variant)
 	emit_cf_list(ctx, &fxn->body);
 	/* TODO emit_block(ctx, fxn->end_block); */
 
-	if (so->type == SHADER_VERTEX)
+	if (so->type == MESA_SHADER_VERTEX)
 		extra_position_exports(ctx, variant);
 
 	ralloc_free(ctx->nir);
 
 	/* kill unused param input */
-	if (so->type == SHADER_FRAGMENT && !so->need_param)
+	if (so->type == MESA_SHADER_FRAGMENT && !so->need_param)
 		ctx->input[so->f.inputs_count].initialized = false;
 }

@@ -41,8 +41,11 @@ struct pipe_screen *imx_drm_screen_create(int fd)
    };
    struct pipe_screen *screen;
 
+   printf("imx_drm_screen_create\n");
+
 #if defined(GALLIUM_ETNAVIV)
    ro.gpu_fd = loader_open_render_node("etnaviv");
+   printf("a %i\n", ro.gpu_fd);
    if (ro.gpu_fd >= 0) {
       screen = etna_drm_screen_create_renderonly(&ro);
       if (screen)
@@ -52,7 +55,9 @@ struct pipe_screen *imx_drm_screen_create(int fd)
 #endif
 
 #if defined(GALLIUM_FREEDRENO)
-   ro.gpu_fd = loader_open_render_node("msm");
+   //ro.gpu_fd = loader_open_render_node("msm");
+   ro.gpu_fd = open("/dev/dri/renderD128", O_RDWR);
+   //loader_open_render_node("msm");
    if (ro.gpu_fd >= 0) {
       screen = fd_drm_screen_create_renderonly(&ro);
       if (screen)
