@@ -101,6 +101,7 @@ struct fd_ringbuffer {
 	int size;
 	int32_t refcnt;
 	enum fd_ringbuffer_flags flags;
+	struct fd_bo *ring_bo;
 };
 
 /* Allocate a new long-lived state object, not associated with

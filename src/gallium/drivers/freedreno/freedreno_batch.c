@@ -88,6 +88,11 @@ batch_init(struct fd_batch *batch)
 
 	fd_reset_wfi(batch);
 
+	if (is_a2xx(ctx->screen)) {
+		util_dynarray_init(&batch->shader_patches, NULL);
+		util_dynarray_init(&batch->gmem_patches, NULL);
+	}
+
 	util_dynarray_init(&batch->draw_patches, NULL);
 
 	if (is_a3xx(ctx->screen))

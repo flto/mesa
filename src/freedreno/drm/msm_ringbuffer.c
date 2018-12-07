@@ -131,7 +131,6 @@ struct msm_ringbuffer {
 	} u;
 
 	struct msm_cmd *cmd;          /* current cmd */
-	struct fd_bo *ring_bo;
 };
 FD_DEFINE_CAST(fd_ringbuffer, msm_ringbuffer);
 
@@ -204,7 +203,7 @@ msm_submit_suballoc_ring_bo(struct fd_submit *submit,
 		struct msm_ringbuffer *suballoc_ring =
 				to_msm_ringbuffer(msm_submit->suballoc_ring);
 
-		suballoc_bo = suballoc_ring->ring_bo;
+		suballoc_bo = suballoc_ring->base.ring_bo;
 		suballoc_offset = fd_ringbuffer_size(msm_submit->suballoc_ring) +
 				suballoc_ring->offset;
 
@@ -217,11 +216,11 @@ msm_submit_suballoc_ring_bo(struct fd_submit *submit,
 
 	if (!suballoc_bo) {
 		// TODO possibly larger size for streaming bo?
-		msm_ring->ring_bo = fd_bo_new_ring(
+		msm_ring->base.ring_bo = fd_bo_new_ring(
 				submit->pipe->dev, 0x8000, 0);
 		msm_ring->offset = 0;
 	} else {
-		msm_ring->ring_bo = fd_bo_ref(suballoc_bo);
+		msm_ring->base.ring_bo = fd_bo_ref(suballoc_bo);
 		msm_ring->offset = suballoc_offset;
 	}
 
@@ -256,7 +255,7 @@ msm_submit_new_ringbuffer(struct fd_submit *submit, uint32_t size,
 			size = INIT_SIZE;
 
 		msm_ring->offset = 0;
-		msm_ring->ring_bo = fd_bo_new_ring(submit->pipe->dev, size, 0);
+		msm_ring->base.ring_bo = fd_bo_new_ring(submit->pipe->dev, size, 0);
 	}
 
 	if (!msm_ringbuffer_init(msm_ring, size, flags))
@@ -347,7 +346,7 @@ msm_submit_flush(struct fd_submit *submit, int in_fence_fd,
 
 			cmds[i].type = MSM_SUBMIT_CMD_IB_TARGET_BUF;
 			cmds[i].submit_idx =
-				append_bo(msm_submit, msm_ring->ring_bo, FD_RELOC_READ);
+				append_bo(msm_submit, msm_ring->base.ring_bo, FD_RELOC_READ);
 			cmds[i].submit_offset = msm_ring->offset;
 			cmds[i].size = offset_bytes(ring->cur, ring->start);
 			cmds[i].pad = 0;
@@ -483,7 +482,7 @@ finalize_current_cmd(struct fd_ringbuffer *ring)
 	if (!msm_ring->cmd)
 		return;
 
-	debug_assert(msm_ring->cmd->ring_bo == msm_ring->ring_bo);
+	debug_assert(msm_ring->cmd->ring_bo == msm_ring->base.ring_bo);
 
 	unsigned idx = APPEND(&msm_ring->u, cmds);
 
@@ -503,11 +502,11 @@ msm_ringbuffer_grow(struct fd_ringbuffer *ring, uint32_t size)
 
 	finalize_current_cmd(ring);
 
-	fd_bo_del(msm_ring->ring_bo);
-	msm_ring->ring_bo = fd_bo_new_ring(pipe->dev, size, 0);
-	msm_ring->cmd = cmd_new(msm_ring->ring_bo);
+	fd_bo_del(msm_ring->base.ring_bo);
+	msm_ring->base.ring_bo = fd_bo_new_ring(pipe->dev, size, 0);
+	msm_ring->cmd = cmd_new(msm_ring->base.ring_bo);
 
-	ring->start = fd_bo_map(msm_ring->ring_bo);
+	ring->start = fd_bo_map(msm_ring->base.ring_bo);
 	ring->end = &(ring->start[size/4]);
 	ring->cur = ring->start;
 	ring->size = size;
@@ -603,9 +602,10 @@ msm_ringbuffer_emit_reloc_ring(struct fd_ringbuffer *ring,
 		bo   = msm_target->u.cmds[cmd_idx]->ring_bo;
 		size = msm_target->u.cmds[cmd_idx]->size;
 	} else {
-		bo   = msm_target->ring_bo;
+		bo   = msm_target->base.ring_bo;
 		size = offset_bytes(target->cur, target->start);
 	}
+	printf("size=%u\n", size);
 
 	msm_ringbuffer_emit_reloc(ring, &(struct fd_reloc){
 		.bo     = bo,
@@ -643,7 +643,7 @@ msm_ringbuffer_destroy(struct fd_ringbuffer *ring)
 {
 	struct msm_ringbuffer *msm_ring = to_msm_ringbuffer(ring);
 
-	fd_bo_del(msm_ring->ring_bo);
+	fd_bo_del(msm_ring->base.ring_bo);
 	if (msm_ring->cmd)
 		cmd_free(msm_ring->cmd);
 
@@ -682,9 +682,9 @@ msm_ringbuffer_init(struct msm_ringbuffer *msm_ring, uint32_t size,
 {
 	struct fd_ringbuffer *ring = &msm_ring->base;
 
-	debug_assert(msm_ring->ring_bo);
+	debug_assert(msm_ring->base.ring_bo);
 
-	uint8_t *base = fd_bo_map(msm_ring->ring_bo);
+	uint8_t *base = fd_bo_map(msm_ring->base.ring_bo);
 	ring->start = (void *)(base + msm_ring->offset);
 	ring->end = &(ring->start[size/4]);
 	ring->cur = ring->start;
@@ -697,7 +697,7 @@ msm_ringbuffer_init(struct msm_ringbuffer *msm_ring, uint32_t size,
 	msm_ring->u.cmds = NULL;
 	msm_ring->u.nr_cmds = msm_ring->u.max_cmds = 0;
 
-	msm_ring->cmd = cmd_new(msm_ring->ring_bo);
+	msm_ring->cmd = cmd_new(msm_ring->base.ring_bo);
 
 	return ring;
 }
@@ -709,7 +709,7 @@ msm_ringbuffer_new_object(struct fd_pipe *pipe, uint32_t size)
 
 	msm_ring->u.pipe = pipe;
 	msm_ring->offset = 0;
-	msm_ring->ring_bo = fd_bo_new_ring(pipe->dev, size, 0);
+	msm_ring->base.ring_bo = fd_bo_new_ring(pipe->dev, size, 0);
 	msm_ring->base.refcnt = 1;
 
 	msm_ring->u.reloc_bos = NULL;

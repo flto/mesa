@@ -137,6 +137,12 @@ struct fd_batch {
 	 */
 	struct util_dynarray draw_patches;
 
+	/* for patching binning pass shaders on a20x */
+	struct util_dynarray shader_patches;
+
+	/* for dynamic patching command stream patching */
+	struct util_dynarray gmem_patches;
+
 	/* Keep track of writes to RB_RENDER_CONTROL which need to be patched
 	 * once we know whether or not to use GMEM, and GMEM tile pitch.
 	 *

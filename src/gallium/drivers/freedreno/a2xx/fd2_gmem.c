@@ -112,12 +112,14 @@ emit_gmem2mem_surf(struct fd_batch *batch, uint32_t base,
 }
 
 static void
-fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
+fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile) {}
+
+static void emit_gmem2mem(struct fd_batch *batch)
 {
 	struct fd_context *ctx = batch->ctx;
 	struct fd2_context *fd2_ctx = fd2_context(ctx);
 	struct fd_gmem_stateobj *gmem = &ctx->gmem;
-	struct fd_ringbuffer *ring = batch->gmem;
+	struct fd_ringbuffer *ring = batch->draw; //batch->gmem;
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 
 	fd2_emit_vertex_bufs(ring, 0x9c, (struct fd2_vertex_buf[]) {
@@ -175,8 +177,10 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COPY_DEST_OFFSET));
-	OUT_RING(ring, A2XX_RB_COPY_DEST_OFFSET_X(tile->xoff) |
-			A2XX_RB_COPY_DEST_OFFSET_Y(tile->yoff));
+	//OUT_RING(ring, A2XX_RB_COPY_DEST_OFFSET_X(tile->xoff) |
+	//		A2XX_RB_COPY_DEST_OFFSET_Y(tile->yoff));
+	OUT_RING(ring, 0);
+	//OUT_RINGP(ring, REG_A2XX_RB_COPY_DEST_OFFSET, &batch->gmem_patches);
 
 	if (batch->resolve & (FD_BUFFER_DEPTH | FD_BUFFER_STENCIL))
 		emit_gmem2mem_surf(batch, gmem->zsbuf_base[0], pfb->zsbuf);
@@ -477,6 +481,10 @@ fd2_emit_tile_init(struct fd_batch *batch)
 	}
 
 	util_dynarray_resize(&batch->draw_patches, 0);
+
+	/* append gmem2mem to draw */
+	util_dynarray_resize(&batch->gmem_patches, 0);
+	emit_gmem2mem(batch);
 }
 
 /* before mem2gmem */
@@ -548,6 +556,27 @@ fd2_emit_tile_renderprep(struct fd_batch *batch, struct fd_tile *tile)
 		OUT_PKT3(ring, CP_SET_DRAW_INIT_FLAGS, 1);
 		OUT_RELOC(ring, pipe->bo, 0, 0, 0);
 	}
+
+#if 0
+	for (int i = 0; i < fd_patch_num_elements(&batch->gmem_patches); i++) {
+		struct fd_cs_patch *patch = fd_patch_element(&batch->gmem_patches, i);
+
+		printf("%u: offset=%u\n", i, patch->cs - batch->draw->start);
+
+		OUT_PKT3(ring, CP_MEM_WRITE, 2);
+		OUT_RELOC(ring, batch->draw->ring_bo,
+			4 * (patch->cs - batch->draw->start), 0, 0);
+
+		patch->cs[0] = 0;
+
+		switch (patch->val) {
+		case REG_A2XX_RB_COPY_DEST_OFFSET:
+			OUT_RING(ring, A2XX_RB_COPY_DEST_OFFSET_X(tile->xoff) |
+				A2XX_RB_COPY_DEST_OFFSET_Y(tile->yoff));
+			break;
+		}
+	}
+#endif
 }
 
 void
