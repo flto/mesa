@@ -129,11 +129,13 @@ loader_open_render_node(const char *name)
    for (i = 0; i < num; i++) {
       device = devices[i];
 
-      if ((device->available_nodes & (1 << DRM_NODE_RENDER)) &&
-          (device->bustype == DRM_BUS_PLATFORM)) {
+      //if ((device->available_nodes & (1 << DRM_NODE_RENDER)) &&
+      //    (device->bustype == DRM_BUS_PLATFORM)) {
+      if (1) {
          drmVersionPtr version;
 
-         fd = open(device->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+         //fd = open(device->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+         fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
          if (fd < 0)
             continue;
 
