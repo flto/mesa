@@ -161,6 +161,14 @@ fd2_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_CLIP_CNTL));
 	OUT_RING(ring, 0x00000000);
 
+	/* make sure the RECT covers the entire bin */
+	OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VPORT_XSCALE));
+	OUT_RING(ring, fui(4096.0));
+	OUT_RING(ring, fui(0.0));
+	OUT_RING(ring, fui(4096.0));
+	OUT_RING(ring, fui(0.0));
+
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_MODECONTROL));
 	OUT_RING(ring, A2XX_RB_MODECONTROL_EDRAM_MODE(EDRAM_COPY));
