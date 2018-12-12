@@ -118,7 +118,7 @@ static void
 do_blit(struct fd_context *ctx, const struct pipe_blit_info *blit, bool fallback)
 {
 	/* TODO size threshold too?? */
-	if (!fallback) {
+	if (0) {
 		/* do blit on gpu: */
 		fd_blitter_pipe_begin(ctx, false, true, FD_STAGE_BLIT);
 		ctx->blit(ctx, blit);
