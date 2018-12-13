@@ -518,7 +518,7 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 	struct pipe_framebuffer_state *fb = &ctx->batch->framebuffer;
 
 	// TODO: don't use on depth/stencil mismatch
-	if (true) {
+	if (!((fd_mesa_debug & FD_DBG_BYPASS))) {
 		fd2_clear_fast(ctx, buffers, color, depth, stencil);
 		goto dirty;
 	}

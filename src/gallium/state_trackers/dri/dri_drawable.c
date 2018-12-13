@@ -470,6 +470,9 @@ dri_postprocessing(struct dri_context *ctx,
  * \param flags             a combination of _DRI2_FLUSH_xxx flags
  * \param throttle_reason   the reason for throttling, 0 = no throttling
  */
+
+extern bool is_hud_batch;
+
 void
 dri_flush(__DRIcontext *cPriv,
           __DRIdrawable *dPriv,
@@ -535,9 +538,12 @@ dri_flush(__DRIcontext *cPriv,
       if (ctx->hud) {
          hud_run(ctx->hud, ctx->st->cso_context,
                  drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
+         is_hud_batch = true;
       }
 
       pipe->flush_resource(pipe, drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
+      if (ctx->hud)
+	     is_hud_batch = false;
    }
 
    flush_flags = 0;

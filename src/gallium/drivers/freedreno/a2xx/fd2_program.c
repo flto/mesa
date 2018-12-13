@@ -247,6 +247,9 @@ fd2_program_emit(struct fd_batch *batch, struct fd_ringbuffer *ring,
 		vpi = &vp->variant[i].info;
 	} else {
 		fp = prog->fp;
+		if ((fd_mesa_debug & FD_DBG_FRAGS) && vp != batch->ctx->blit_prog[0].vp)
+			fp = batch->ctx->solid_prog.fp;
+
 		fpi = &fp->variant[0].info;
 
 		for (i = 1; i < ARRAY_SIZE(vp->variant); i++) {

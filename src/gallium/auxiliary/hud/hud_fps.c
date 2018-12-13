@@ -66,6 +66,20 @@ query_fps(struct hud_graph *gr, struct pipe_context *pipe)
    }
 }
 
+extern int tilecount, pixelcount;
+
+static void
+query_tilecount(struct hud_graph *gr, struct pipe_context *pipe)
+{
+	hud_graph_add_value(gr, tilecount);
+}
+
+static void
+query_pixelcount(struct hud_graph *gr, struct pipe_context *pipe)
+{
+	hud_graph_add_value(gr, pixelcount);
+}
+
 static void
 free_query_data(void *p, struct pipe_context *pipe)
 {
@@ -119,6 +133,36 @@ hud_frametime_graph_install(struct hud_pane *pane)
    gr->query_new_value = query_fps;
 
    gr->free_query_data = free_query_data;
+
+   hud_pane_add_graph(pane, gr);
+}
+
+void
+hud_tilecount_graph_install(struct hud_pane *pane)
+{
+   struct hud_graph *gr = CALLOC_STRUCT(hud_graph);
+
+   if (!gr)
+      return;
+
+	strcpy(gr->name, "tilecount");
+
+   gr->query_new_value = query_tilecount;
+
+   hud_pane_add_graph(pane, gr);
+}
+
+void
+hud_pixelcount_graph_install(struct hud_pane *pane)
+{
+   struct hud_graph *gr = CALLOC_STRUCT(hud_graph);
+
+   strcpy(gr->name, "pixelcount");
+
+   if (!gr)
+      return;
+
+   gr->query_new_value = query_pixelcount;
 
    hud_pane_add_graph(pane, gr);
 }

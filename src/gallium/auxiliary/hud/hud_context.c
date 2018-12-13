@@ -157,7 +157,7 @@ hud_draw_string(struct hud_context *hud, unsigned x, unsigned y,
 
    hud_draw_background_quad(hud,
                             x, y,
-                            x + strlen(buf)*hud->font.glyph_width,
+                            x + (strlen(buf)+1)*hud->font.glyph_width,
                             y + hud->font.glyph_height);
 
    while (*s) {
@@ -1252,6 +1252,12 @@ hud_parse_env_var(struct hud_context *hud, struct pipe_screen *screen,
       else if (strcmp(name, "frametime") == 0) {
          hud_frametime_graph_install(pane);
       }
+      else if (strcmp(name, "tilecount") == 0) {
+         hud_tilecount_graph_install(pane);
+      }
+      else if (strcmp(name, "pixelcount") == 0) {
+         hud_pixelcount_graph_install(pane);
+      }
       else if (strcmp(name, "cpu") == 0) {
          hud_cpu_graph_install(pane, ALL_CPUS);
       }
@@ -1849,7 +1855,7 @@ hud_create(struct cso_context *cso, struct hud_context *share)
    hud->no_blend.rt[0].colormask = PIPE_MASK_RGBA;
 
    hud->alpha_blend.rt[0].colormask = PIPE_MASK_RGBA;
-   hud->alpha_blend.rt[0].blend_enable = 1;
+   hud->alpha_blend.rt[0].blend_enable = 0;
    hud->alpha_blend.rt[0].rgb_func = PIPE_BLEND_ADD;
    hud->alpha_blend.rt[0].rgb_src_factor = PIPE_BLENDFACTOR_SRC_ALPHA;
    hud->alpha_blend.rt[0].rgb_dst_factor = PIPE_BLENDFACTOR_INV_SRC_ALPHA;

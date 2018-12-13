@@ -141,9 +141,15 @@ emit_texture(struct fd_ringbuffer *ring, struct fd_context *ctx,
 	else
 		OUT_RING(ring, 0);
 
-	OUT_RING(ring, view->tex2);
-	OUT_RING(ring, sampler->tex3 | view->tex3);
-	OUT_RING(ring, sampler->tex4 | view->tex4);
+	if (fd_mesa_debug & FD_DBG_TEX1) {
+		OUT_RING(ring, 0);
+		OUT_RING(ring, A2XX_SQ_TEX_3_SWIZ_W(SQ_TEX_ONE));
+		OUT_RING(ring, 0);
+	} else {
+		OUT_RING(ring, view->tex2);
+		OUT_RING(ring, sampler->tex3 | view->tex3);
+		OUT_RING(ring, sampler->tex4 | view->tex4);
+	}
 
 	if (rsc && rsc->base.last_level)
 		OUT_RELOC(ring, rsc->bo, fd_resource_offset(rsc, 1, 0), view->tex5, 0);
@@ -356,7 +362,8 @@ fd2_emit_state(struct fd_context *ctx, const enum fd_dirty_3d_state dirty)
 	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_ZSA)) {
 		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 		OUT_RING(ring, CP_REG(REG_A2XX_RB_COLORCONTROL));
-		OUT_RING(ring, zsa->rb_colorcontrol | blend->rb_colorcontrol);
+		OUT_RING(ring, zsa->rb_colorcontrol | blend->rb_colorcontrol |
+			COND(fd_mesa_debug & FD_DBG_BYPASS, A2XX_RB_COLORCONTROL_BLEND_DISABLE));
 	}
 
 	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_FRAMEBUFFER)) {
@@ -386,6 +393,24 @@ fd2_emit_state(struct fd_context *ctx, const enum fd_dirty_3d_state dirty)
 
 	if (dirty & (FD_DIRTY_TEX | FD_DIRTY_PROG))
 		emit_textures(ring, ctx);
+
+	if (fd_mesa_debug & FD_DBG_FRAGS) {
+		static int color;
+		color = (color + 1) & 63;
+
+		if (ctx->batch->num_vertices == 0)
+			color = 0;
+
+		OUT_PKT3(ring, CP_SET_CONSTANT, 5);
+		OUT_RING(ring, 0x00000480);
+
+		for (int i = 0; i < 3; i++) {
+			int j = (color >> i & 1) | (color >> (i+3) & 1) * 2;
+			OUT_RING(ring, fui(0.25f * (j + 1)));
+		}
+
+		OUT_RING(ring, fui(1.0f));
+	}
 }
 
 /* emit per-context initialization:

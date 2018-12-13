@@ -169,6 +169,7 @@ calculate_tiles(struct fd_batch *batch)
 		miny = rsc_fb->damage.miny;
 		width = MIN2(rsc_fb->damage.maxx - minx, pfb->width);
 		height = MIN2(rsc_fb->damage.maxy - miny, pfb->height);
+		rsc_fb->damage.has_damage = false;
 	}
 
 	bin_w = align(width, gmem_alignw);
@@ -337,12 +338,17 @@ calculate_tiles(struct fd_batch *batch)
 #endif
 }
 
+int tilecount, pixelcount;
+bool is_hud_batch;
+
 static void
 render_tiles(struct fd_batch *batch)
 {
 	struct fd_context *ctx = batch->ctx;
 	struct fd_gmem_stateobj *gmem = &ctx->gmem;
-	int i;
+	int i, npixel = 0;
+
+	//printf(": (%u %u %u %u) %u %u : %p %u %u\n", gmem->minx, gmem->miny, gmem->width, gmem->height, batch->restore, batch->resolve, pfb->cbufs[0], pfb->width, pfb->height);
 
 	ctx->emit_tile_init(batch);
 
@@ -372,6 +378,13 @@ render_tiles(struct fd_batch *batch)
 
 		/* emit gmem2mem to transfer tile back to system memory: */
 		ctx->emit_tile_gmem2mem(batch, tile);
+
+		npixel += tile->bin_w * tile->bin_h;
+	}
+
+	if (batch->resolve) {
+		tilecount = gmem->nbins_x * gmem->nbins_y;
+		pixelcount = npixel;
 	}
 
 	if (ctx->emit_tile_fini)
@@ -418,7 +431,7 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 
 	if (ctx->emit_sysmem_prep && !batch->nondraw) {
 		if (batch->cleared || batch->gmem_reason ||
-				((batch->num_draws > 5) && !batch->blit) ||
+				((batch->num_draws > 5 && !is_hud_batch) && !batch->blit) ||
 				(pfb->samples > 1)) {
 			DBG("GMEM: cleared=%x, gmem_reason=%x, num_draws=%u, samples=%u",
 				batch->cleared, batch->gmem_reason, batch->num_draws,
@@ -426,6 +439,9 @@ fd_gmem_render_tiles(struct fd_batch *batch)
 		} else if (!(fd_mesa_debug & FD_DBG_NOBYPASS)) {
 			sysmem = true;
 		}
+
+		if (fd_mesa_debug & FD_DBG_BYPASS)
+			sysmem = true;
 
 		/* For ARB_framebuffer_no_attachments: */
 		if ((pfb->nr_cbufs == 0) && !pfb->zsbuf) {
