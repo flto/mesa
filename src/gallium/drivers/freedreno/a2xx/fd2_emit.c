@@ -325,16 +325,6 @@ fd2_emit_state(struct fd_context *ctx, const enum fd_dirty_3d_state dirty)
 		OUT_RING(ring, fui(ctx->viewport.scale[2]));       /* PA_CL_VPORT_ZSCALE */
 		OUT_RING(ring, fui(ctx->viewport.translate[2]));   /* PA_CL_VPORT_ZOFFSET */
 
-		OUT_PKT3(ring, CP_SET_CONSTANT, 2);
-		OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
-		OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
-				A2XX_PA_CL_VTE_CNTL_VPORT_X_SCALE_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_X_OFFSET_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Y_SCALE_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
-				A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
-
 		/* set viewport in C65/C66, for a20x hw binning and fragcoord.z */
 		OUT_PKT3(ring, CP_SET_CONSTANT, 9);
 		OUT_RING(ring, 0x00000184);
@@ -540,6 +530,16 @@ fd2_emit_restore(struct fd_context *ctx, struct fd_ringbuffer *ring)
 	OUT_RING(ring, 0x00000000);        /* RB_BLEND_GREEN */
 	OUT_RING(ring, 0x00000000);        /* RB_BLEND_BLUE */
 	OUT_RING(ring, 0x000000ff);        /* RB_BLEND_ALPHA */
+
+	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
+	OUT_RING(ring, CP_REG(REG_A2XX_PA_CL_VTE_CNTL));
+	OUT_RING(ring, A2XX_PA_CL_VTE_CNTL_VTX_W0_FMT |
+			A2XX_PA_CL_VTE_CNTL_VPORT_X_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_X_OFFSET_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Y_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Y_OFFSET_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Z_SCALE_ENA |
+			A2XX_PA_CL_VTE_CNTL_VPORT_Z_OFFSET_ENA);
 }
 
 static void
