@@ -86,6 +86,7 @@ private:
                        nir_ssa_def *src2, nir_ssa_def *src3);
 
    bool supports_ints;
+   bool type_force_float(glsl_base_type type);
 
    nir_shader *shader;
    nir_function_impl *impl;
@@ -1261,6 +1262,12 @@ nir_visitor::visit(ir_call *ir)
    unreachable("glsl_to_nir only handles function calls to intrinsics");
 }
 
+bool
+nir_visitor::type_force_float(glsl_base_type type)
+{
+   return !supports_ints && type != GLSL_TYPE_BOOL;
+}
+
 void
 nir_visitor::visit(ir_assignment *ir)
 {
@@ -1298,7 +1305,8 @@ nir_visitor::visit(ir_assignment *ir)
       for (unsigned i = 0; i < 4; i++) {
          swiz[i] = ir->write_mask & (1 << i) ? component++ : 0;
       }
-      src = nir_swizzle(&b, src, swiz, num_components, !supports_ints);
+      src = nir_swizzle(&b, src, swiz, num_components,
+                        type_force_float(ir->rhs->type->base_type));
    }
 
    if (ir->condition) {
@@ -1495,22 +1503,21 @@ nir_visitor::visit(ir_expression *ir)
       srcs[i] = evaluate_rvalue(ir->operands[i]);
 
    glsl_base_type types[4];
-   for (unsigned i = 0; i < ir->num_operands; i++)
-      if (supports_ints)
-         types[i] = ir->operands[i]->type->base_type;
-      else
+   for (unsigned i = 0; i < ir->num_operands; i++) {
+      types[i] = ir->operands[i]->type->base_type;
+      if (type_force_float(types[i]))
          types[i] = GLSL_TYPE_FLOAT;
+   }
 
-   glsl_base_type out_type;
-   if (supports_ints)
-      out_type = ir->type->base_type;
-   else
+   glsl_base_type out_type = ir->type->base_type;
+   if (type_force_float(out_type))
       out_type = GLSL_TYPE_FLOAT;
 
    switch (ir->operation) {
    case ir_unop_bit_not: result = nir_inot(&b, srcs[0]); break;
    case ir_unop_logic_not:
-      result = supports_ints ? nir_inot(&b, srcs[0]) : nir_fnot(&b, srcs[0]);
+      result = type_is_float(types[0]) ? nir_fnot(&b, srcs[0])
+                                       : nir_inot(&b, srcs[0]);
       break;
    case ir_unop_neg:
       result = type_is_float(types[0]) ? nir_fneg(&b, srcs[0])
@@ -1542,7 +1549,7 @@ nir_visitor::visit(ir_expression *ir)
       result = supports_ints ? nir_u2f32(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
       break;
    case ir_unop_b2f:
-      result = supports_ints ? nir_b2f32(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
+      result = nir_b2f32(&b, srcs[0]);
       break;
    case ir_unop_f2i:
    case ir_unop_f2u:
@@ -1788,16 +1795,16 @@ nir_visitor::visit(ir_expression *ir)
    case ir_binop_bit_or: result = nir_ior(&b, srcs[0], srcs[1]); break;
    case ir_binop_bit_xor: result = nir_ixor(&b, srcs[0], srcs[1]); break;
    case ir_binop_logic_and:
-      result = supports_ints ? nir_iand(&b, srcs[0], srcs[1])
-                             : nir_fand(&b, srcs[0], srcs[1]);
+      result = type_is_float(types[0]) ? nir_fand(&b, srcs[0], srcs[1])
+                                       : nir_iand(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_logic_or:
-      result = supports_ints ? nir_ior(&b, srcs[0], srcs[1])
-                             : nir_for(&b, srcs[0], srcs[1]);
+      result = type_is_float(types[0]) ? nir_for(&b, srcs[0], srcs[1])
+                                       : nir_ior(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_logic_xor:
-      result = supports_ints ? nir_ixor(&b, srcs[0], srcs[1])
-                             : nir_fxor(&b, srcs[0], srcs[1]);
+      result = type_is_float(types[0]) ? nir_fxor(&b, srcs[0], srcs[1])
+                                       : nir_ixor(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_lshift: result = nir_ishl(&b, srcs[0], srcs[1]); break;
    case ir_binop_rshift:
@@ -1811,108 +1818,70 @@ nir_visitor::visit(ir_expression *ir)
    case ir_binop_carry:  result = nir_uadd_carry(&b, srcs[0], srcs[1]);  break;
    case ir_binop_borrow: result = nir_usub_borrow(&b, srcs[0], srcs[1]); break;
    case ir_binop_less:
-      if (supports_ints) {
-         if (type_is_float(types[0]))
-            result = nir_flt(&b, srcs[0], srcs[1]);
-         else if (type_is_signed(types[0]))
-            result = nir_ilt(&b, srcs[0], srcs[1]);
-         else
-            result = nir_ult(&b, srcs[0], srcs[1]);
-      } else {
-         result = nir_slt(&b, srcs[0], srcs[1]);
-      }
+      if (type_is_float(types[0]))
+         result = nir_flt(&b, srcs[0], srcs[1]);
+      else if (type_is_signed(types[0]))
+         result = nir_ilt(&b, srcs[0], srcs[1]);
+      else
+         result = nir_ult(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_gequal:
-      if (supports_ints) {
-         if (type_is_float(types[0]))
-            result = nir_fge(&b, srcs[0], srcs[1]);
-         else if (type_is_signed(types[0]))
-            result = nir_ige(&b, srcs[0], srcs[1]);
-         else
-            result = nir_uge(&b, srcs[0], srcs[1]);
-      } else {
-         result = nir_sge(&b, srcs[0], srcs[1]);
-      }
+      if (type_is_float(types[0]))
+         result = nir_fge(&b, srcs[0], srcs[1]);
+      else if (type_is_signed(types[0]))
+         result = nir_ige(&b, srcs[0], srcs[1]);
+      else
+         result = nir_uge(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_equal:
-      if (supports_ints) {
-         if (type_is_float(types[0]))
-            result = nir_feq(&b, srcs[0], srcs[1]);
-         else
-            result = nir_ieq(&b, srcs[0], srcs[1]);
-      } else {
-         result = nir_seq(&b, srcs[0], srcs[1]);
-      }
+      if (type_is_float(types[0]))
+         result = nir_feq(&b, srcs[0], srcs[1]);
+      else
+         result = nir_ieq(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_nequal:
-      if (supports_ints) {
-         if (type_is_float(types[0]))
-            result = nir_fne(&b, srcs[0], srcs[1]);
-         else
-            result = nir_ine(&b, srcs[0], srcs[1]);
-      } else {
-         result = nir_sne(&b, srcs[0], srcs[1]);
-      }
+      if (type_is_float(types[0]))
+         result = nir_fne(&b, srcs[0], srcs[1]);
+      else
+         result = nir_ine(&b, srcs[0], srcs[1]);
       break;
    case ir_binop_all_equal:
-      if (supports_ints) {
-         if (type_is_float(types[0])) {
-            switch (ir->operands[0]->type->vector_elements) {
-               case 1: result = nir_feq(&b, srcs[0], srcs[1]); break;
-               case 2: result = nir_ball_fequal2(&b, srcs[0], srcs[1]); break;
-               case 3: result = nir_ball_fequal3(&b, srcs[0], srcs[1]); break;
-               case 4: result = nir_ball_fequal4(&b, srcs[0], srcs[1]); break;
-               default:
-                  unreachable("not reached");
-            }
-         } else {
-            switch (ir->operands[0]->type->vector_elements) {
-               case 1: result = nir_ieq(&b, srcs[0], srcs[1]); break;
-               case 2: result = nir_ball_iequal2(&b, srcs[0], srcs[1]); break;
-               case 3: result = nir_ball_iequal3(&b, srcs[0], srcs[1]); break;
-               case 4: result = nir_ball_iequal4(&b, srcs[0], srcs[1]); break;
-               default:
-                  unreachable("not reached");
-            }
+      if (type_is_float(types[0])) {
+         switch (ir->operands[0]->type->vector_elements) {
+            case 1: result = nir_feq(&b, srcs[0], srcs[1]); break;
+            case 2: result = nir_ball_fequal2(&b, srcs[0], srcs[1]); break;
+            case 3: result = nir_ball_fequal3(&b, srcs[0], srcs[1]); break;
+            case 4: result = nir_ball_fequal4(&b, srcs[0], srcs[1]); break;
+            default:
+               unreachable("not reached");
          }
       } else {
          switch (ir->operands[0]->type->vector_elements) {
-            case 1: result = nir_seq(&b, srcs[0], srcs[1]); break;
-            case 2: result = nir_fall_equal2(&b, srcs[0], srcs[1]); break;
-            case 3: result = nir_fall_equal3(&b, srcs[0], srcs[1]); break;
-            case 4: result = nir_fall_equal4(&b, srcs[0], srcs[1]); break;
+            case 1: result = nir_ieq(&b, srcs[0], srcs[1]); break;
+            case 2: result = nir_ball_iequal2(&b, srcs[0], srcs[1]); break;
+            case 3: result = nir_ball_iequal3(&b, srcs[0], srcs[1]); break;
+            case 4: result = nir_ball_iequal4(&b, srcs[0], srcs[1]); break;
             default:
                unreachable("not reached");
          }
       }
       break;
    case ir_binop_any_nequal:
-      if (supports_ints) {
-         if (type_is_float(types[0])) {
-            switch (ir->operands[0]->type->vector_elements) {
-               case 1: result = nir_fne(&b, srcs[0], srcs[1]); break;
-               case 2: result = nir_bany_fnequal2(&b, srcs[0], srcs[1]); break;
-               case 3: result = nir_bany_fnequal3(&b, srcs[0], srcs[1]); break;
-               case 4: result = nir_bany_fnequal4(&b, srcs[0], srcs[1]); break;
-               default:
-                  unreachable("not reached");
-            }
-         } else {
-            switch (ir->operands[0]->type->vector_elements) {
-               case 1: result = nir_ine(&b, srcs[0], srcs[1]); break;
-               case 2: result = nir_bany_inequal2(&b, srcs[0], srcs[1]); break;
-               case 3: result = nir_bany_inequal3(&b, srcs[0], srcs[1]); break;
-               case 4: result = nir_bany_inequal4(&b, srcs[0], srcs[1]); break;
-               default:
-                  unreachable("not reached");
-            }
+      if (type_is_float(types[0])) {
+         switch (ir->operands[0]->type->vector_elements) {
+            case 1: result = nir_fne(&b, srcs[0], srcs[1]); break;
+            case 2: result = nir_bany_fnequal2(&b, srcs[0], srcs[1]); break;
+            case 3: result = nir_bany_fnequal3(&b, srcs[0], srcs[1]); break;
+            case 4: result = nir_bany_fnequal4(&b, srcs[0], srcs[1]); break;
+            default:
+               unreachable("not reached");
          }
       } else {
          switch (ir->operands[0]->type->vector_elements) {
-            case 1: result = nir_sne(&b, srcs[0], srcs[1]); break;
-            case 2: result = nir_fany_nequal2(&b, srcs[0], srcs[1]); break;
-            case 3: result = nir_fany_nequal3(&b, srcs[0], srcs[1]); break;
-            case 4: result = nir_fany_nequal4(&b, srcs[0], srcs[1]); break;
+            case 1: result = nir_ine(&b, srcs[0], srcs[1]); break;
+            case 2: result = nir_bany_inequal2(&b, srcs[0], srcs[1]); break;
+            case 3: result = nir_bany_inequal3(&b, srcs[0], srcs[1]); break;
+            case 4: result = nir_bany_inequal4(&b, srcs[0], srcs[1]); break;
             default:
                unreachable("not reached");
          }
@@ -1945,10 +1914,7 @@ nir_visitor::visit(ir_expression *ir)
       result = nir_flrp(&b, srcs[0], srcs[1], srcs[2]);
       break;
    case ir_triop_csel:
-      if (supports_ints)
-         result = nir_bcsel(&b, srcs[0], srcs[1], srcs[2]);
-      else
-         result = nir_fcsel(&b, srcs[0], srcs[1], srcs[2]);
+      result = nir_bcsel(&b, srcs[0], srcs[1], srcs[2]);
       break;
    case ir_triop_bitfield_extract:
       result = (out_type == GLSL_TYPE_INT) ?
@@ -1972,7 +1938,8 @@ nir_visitor::visit(ir_swizzle *ir)
 {
    unsigned swizzle[4] = { ir->mask.x, ir->mask.y, ir->mask.z, ir->mask.w };
    result = nir_swizzle(&b, evaluate_rvalue(ir->val), swizzle,
-                        ir->type->vector_elements, !supports_ints);
+                        ir->type->vector_elements,
+                        type_force_float(ir->type->base_type));
 }
 
 void
