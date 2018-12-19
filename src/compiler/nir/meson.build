@@ -114,6 +114,7 @@ files_libnir = files(
   'nir_lower_alpha_test.c',
   'nir_lower_atomics_to_ssbo.c',
   'nir_lower_bitmap.c',
+  'nir_lower_bool_to_float.c',
   'nir_lower_bool_to_int32.c',
   'nir_lower_clamp_color_outputs.c',
   'nir_lower_clip.c',
@@ -248,7 +249,7 @@ if with_tests
       include_directories : [inc_common],
       dependencies : [dep_thread, idep_gtest, idep_nir],
       link_with : libmesa_util,
-    ), 
+    ),
     suite : ['compiler', 'nir'],
   )
 
